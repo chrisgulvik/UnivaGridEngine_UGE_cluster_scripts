@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+
+
+# Help
+if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+  echo 'this script is not meant to be executed directly'
+  exit 0
+fi
+
+# Input requirements
+source $HOME/.bashrc
+source /etc/profile.d/modules.sh
+if [[ -z "$LAB_HOME" ]]; then
+  echo 'ERROR: $LAB_HOME not set'
+  exit 1
+fi
+if [[ -z "$ASM_DIR" || -z "$TRIM_DIR" || -z "$O" ]]; then
+  echo 'ERROR: ASM_DIR TRIM_DIR O (3 variables required)'
+  exit 1
+fi
+
+# Setup dir structure
+mkdir -p $O/qa
+
+# QA assemblies
+module load quast/4.3
+quast.py --output-dir $O/qa --min-contig 100 --threads $NSLOTS\
+ --no-html --gene-finding --gene-thresholds 300 --contig-thresholds 500,1000\
+ --ambiguity-usage one --strict-NA --silent $ASM_DIR/*.fna
+module unload quast/4.3
+rm -rf $O/qa/{basic_stats,predicted_genes,quast_corrected_input}
+rm -f $O/qa/{quast.log,report.{pdf,txt,tsv,tex},transposed_report.{txt,tex}}
+mv -f $O/qa/transposed_report.tsv $O/qa/Summary.Assemblies.tab
+
+# QA cleaned reads
+# Verify 3 read files per sample
+shopt -s nullglob
+READS=( $TRIM_DIR/*.fq.gz )
+shopt -u nullglob
+if [[ $((${#READS[@]} % 3)) -ne 0 ]]; then
+  echo """
+ERROR: incorrect number (${#READS[@]}) of FastQ files
+    expected (per sample):
+        <sample>_R1.paired.fq.gz
+        <sample>_R2.paired.fq.gz
+        <sample>.single.fq.gz
+  """
+  exit 1
+fi
+
+echo -n '' > $O/qa/Summary.CleanedReads.Phred20.tab
+for (( i=0; i<${#READS[@]}; i+=3 )); do
+  read1=${READS[i]}
+  read2=${READS[i+1]}
+  single=${READS[i+2]}
+  b1=$(basename $read1 _R1.paired.fq.gz)
+  b2=$(basename $read2 _R2.paired.fq.gz)
+  b3=$(basename $single .single.fq.gz)
+  # Verify each set of reads groups properly
+  nr_uniq_str=$(echo -e "$b1\n$b2\n$b3" | sort -u | wc -l)
+  if [ ${nr_uniq_str} -ne 1 ]; then
+    echo "ERROR: improperly grouped $b1 $b2 $b3"
+    exit 1
+  fi
+  echo -ne "$b1\t" >> $O/qa/Summary.CleanedReads.Phred20.tab
+  # Quantify nucleotides per read set
+  zcat $read1 $read2 $single |\
+   awk 'BEGIN{SUM=0} {if(NR%4==2){SUM+=length($0)}} END{print SUM}'\
+   >> $O/qa/Summary.CleanedReads.Phred20.tab
+done

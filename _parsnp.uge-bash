@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+
+
+# Help
+if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+  echo 'this script is not meant to be executed directly'
+  exit 0
+fi
+
+# Input requirements
+source $HOME/.bashrc
+source /etc/profile.d/modules.sh
+if [[ -z "$LAB_HOME" ]]; then
+  echo 'ERROR: $LAB_HOME not set'
+  exit 1
+fi
+if [[ -z "$ASM_DIR" || -z "$GBK_DIR" || -z "$O" ]]; then
+  echo 'ERROR: ASM_DIR GBK_DIR O (3 variables required)'
+  exit 1
+fi
+
+# Test if >2 sequence files
+shopt -s nullglob
+ASSEMS=( $ASM_DIR/*.fna )
+shopt -u nullglob
+if [ ${#ASSEMS[@]} -lt 3 ]; then
+  echo "ERROR: at least 3 genomes are required for SNP analysis"
+  exit 1
+fi
+echo "${#ASSEMS[@]} genomes will be processed..."
+
+# Setup dir structure
+mkdir -p $O/parsnp
+
+# Pick reference genome based on largest filesize
+LARGEST_SIZE=$(ls -Sr $ASM_DIR/*.fna | tail -n 1)
+REF=$(readlink -f $LARGEST_SIZE)
+
+module load harvest/1.1.3
+parsnp -v -x -c -o $O/parsnp -r $REF -d $ASM_DIR -p $NSLOTS
+harvesttools -i $O/parsnp/parsnp.ggr -M $O/parsnp/LCBs.aln.fa
+harvesttools -i $O/parsnp/parsnp.ggr -S $O/parsnp/SNPs.fa
+harvesttools -i $O/parsnp/parsnp.ggr -V $O/parsnp/SNPs.vcf
+module load harvest/1.1.3
+
+# Cleanup
+rm -f $O/parsnp/{all_mumi.ini,parsnpAligner.{ini,log},parsnp.{rec,tree},psnn.ini}
+rm -f $O/parsnp/*.fna.ref
+pigz --best $O/parsnp/LCBs.aln.fa $O/parsnp/parsnp.xmfa $O/parsnp/SNPs.{fa,vcf}
