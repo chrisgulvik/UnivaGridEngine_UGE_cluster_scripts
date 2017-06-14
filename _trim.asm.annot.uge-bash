@@ -5,11 +5,11 @@
 source $HOME/.bashrc
 source /etc/profile.d/modules.sh
 if [[ -z "$LAB_HOME" ]]; then
-  echo 'ERROR: $LAB_HOME not set'
+  echo 'ERROR: $LAB_HOME not set' >&2
   exit 1
 fi
 if [[ -z "$R1" || -z "$R2" || -z "$B" || -z "$O" ]]; then
-  echo 'ERROR: R1 R2 B O (4 variables required)'
+  echo 'ERROR: R1 R2 B O (4 variables required)' >&2
   exit 1
 fi
 
@@ -40,7 +40,7 @@ rm -f $O/trim_reads/"$B"_R1.unpaired.fq $O/trim_reads/"$B"_R2.unpaired.fq
 module unload java/jdk1.8.0_92 trimmomatic/0.35
 for suff in _R1.paired.fq _R2.paired.fq ; do
   if [[ ! $(find $O/trim_reads/"$B""$suff" -type f -size +25M) ]]; then
-    echo "ERROR: trimmed read unusually small for ${B}${suff}"
+    echo "ERROR: trimmed read unusually small for ${B}${suff}" >&2
     exit 1
   fi
 done
@@ -84,7 +84,7 @@ source deactivate bpy2
 # Verify sufficient bacterial genome size
 if [[ ! $(find $O/asm/"$B".uncorrected.fna -type f -size +2M) ]]; then
   rm -f $O/asm/$B.uncorrected.fna
-  echo "ERROR: genome assembly unusually small for $B"
+  echo "ERROR: genome assembly unusually small for $B" >&2
   echo "check $O/asm/$B/spades.log for details"
   exit 1
 fi

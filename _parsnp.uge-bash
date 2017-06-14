@@ -11,11 +11,11 @@ fi
 source $HOME/.bashrc
 source /etc/profile.d/modules.sh
 if [[ -z "$LAB_HOME" ]]; then
-  echo 'ERROR: $LAB_HOME not set'
+  echo 'ERROR: $LAB_HOME not set' >&2
   exit 1
 fi
 if [[ -z "$ASM_DIR" || -z "$GBK_DIR" || -z "$O" ]]; then
-  echo 'ERROR: ASM_DIR GBK_DIR O (3 variables required)'
+  echo 'ERROR: ASM_DIR GBK_DIR O (3 variables required)' >&2
   exit 1
 fi
 
@@ -24,7 +24,7 @@ shopt -s nullglob
 ASSEMS=( $ASM_DIR/*.fna )
 shopt -u nullglob
 if [ ${#ASSEMS[@]} -lt 3 ]; then
-  echo "ERROR: at least 3 genomes are required for SNP analysis"
+  echo 'ERROR: at least 3 genomes are required for SNP analysis' >&2
   exit 1
 fi
 echo "${#ASSEMS[@]} genomes will be processed..."
