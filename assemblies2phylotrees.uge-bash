@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+
+
+function usage() { 
+  echo "
+Usage: ${0##*/} InputDirectory [OutputDirectory] [-h|--help]
+
+Required:
+  <InputDirectory>   All assembly files ending in fa,fas,
+                     fsa,fna,fasta will be analyzed.
+                     Annotated files are used if present in:
+                     <OutDir>/*.{gb,gbf,gbk} or <OutDir>/*/*.{gb,gbf,gbk}
+                     Commas are forbidden in filenames.
+
+Optional:
+  -h | --help        Show this help message and exit.
+
+  <OutputDirectory>  Location for the output files, which
+                     includes job logfiles. Output files
+                     will be overwritten if already present.
+                     Default: current working directory.
+
+  "
+  }
+
+# Requirements
+command -v qsub >/dev/null 2>&1 || { echo 'ERROR: qsub not found' >&2; exit 1; }
+[[ $1 == "--help" || $1 == "-h" ]] && { usage; exit 0; }
+if [[ $# -lt 1  || $# -gt 2 ]]; then
+  echo "ERROR: improper number ("$#") of arguments provided" >&2
+  usage
+  exit 1
+fi
+source $HOME/.bashrc
+if [[ -z "$LAB_HOME" ]]; then
+  echo 'ERROR: $LAB_HOME not set' >&2
+  exit 1
+fi
+
+# I/O handling
+IN=$(readlink -f "$1")
+if [[ -z "$2" ]]; then
+  OUT="${PWD}"
+else
+  OUT=$(readlink -f "$2")
+fi
+[ ! -d "$OUT"/.log ] && mkdir -pv "$OUT"/.log > /dev/null
+[ ! -d "$OUT"/phy ] && mkdir -pv "$OUT"/phy > /dev/null
+LOG_BASE=$(basename $0 .uge-bash)
+LOGFILE="$OUT"/.log/"$LOG_BASE".log.txt
+JOB_IDS="$OUT"/.log/"$LOG_BASE".job_ids.txt
+
+# Log system and user info for debugging
+echo "[START]           $(date)" > "$LOGFILE"
+echo "[SYS]             $(uname -nro)" >> "$LOGFILE"
+echo "[USER]            $USER" >> "$LOGFILE"
+echo "[CWD]             $PWD" >> "$LOGFILE"
+source /etc/profile.d/modules.sh && module purge
+echo "[MODULES LOADED]  $(module list 2>&1 | \
+  sed 's/Currently Loaded Modulefiles://1')" >> "$LOGFILE"
+echo -e "[PATH]            $PATH\n" >> "$LOGFILE"
+echo "[I/O]" >> "$LOGFILE"
+echo "Input directory:  $IN" | tee -a "$LOGFILE"
+echo -e "Output directory: $OUT\n" | tee -a "$LOGFILE"
+
+cd $IN
+shopt -s nullglob
+ASM=( *.{fa,fas,fsa,fna,fasta} )
+shopt -u nullglob
+[[ "${ASM[@]}" =~ "," ]] && { usage; exit 1; }
+echo -e "[ASSEMBLIES]\n$(echo ${ASM[@]} | tr ' ' '\n')\n" | \
+  tee -a "$LOGFILE"
+
+if [ ${#ASM[@]} -lt 3 ]; then
+  echo 'ERROR: at least 3 assemblies are required' >&2
+  exit 1
+fi
+
+echo "Annotating ${#ASM[@]} genomes..."
+echo -n '' > "$JOB_IDS"
+i=0
+for A in "${ASM[@]}"; do
+  B=$(basename ${A%\.*} | sed 's/[_-\.\(\)]//g')
+  F=$(printf '%q\n' $IN/$A)
+  if [ 0 -lt $(ls $OUT/*/$B.gb{'',f,k} $OUT/$B.gb{'',f,k} 2> /dev/null | wc -l) ]; then
+    echo "Found $B annotated already; skipping prokka annotation... "
+    continue
+  fi
+  JID=$(qsub -q all.q -pe smp 1-128 -N ann.$B -o $OUT/.log -e $OUT/.log <<- EOF
+	source /etc/profile.d/modules.sh
+	module load perl/5.16.1-MT prokka/1.8
+	prokka --outdir $OUT/phy/$B --prefix $B --addgenes --locustag $B \
+		--mincontiglen 250 --evalue 1e-06 --cpus \$NSLOTS --force $F
+	module unload perl/5.16.1-MT prokka/1.8
+	mv -f $OUT/phy/$B/$B.gbf $OUT/phy/$B.gbk
+	rm -rf $OUT/phy/$B
+	EOF
+	)
+  if [[ $JID != *submitted* ]]; then
+    echo 'ERROR: improper job submission' >&2
+    exit 1
+  fi
+  echo "$JID" >> "$JOB_IDS"
+  ((i++))
+done
+sleep 0.5
+
+# Extract sequence from each annotated file
+if [[ $i -gt 0 ]]; then
+  IDS=$(cat "$JOB_IDS" | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
+    tr -d '\n' | sed -e 's/,$//')
+  JOBS="-hold_jid $IDS"
+else
+  JOBS=''
+fi
+
+# 16S rRNA encoding gene tree
+JID=$(qsub -q all.q -pe smp 1-128 -N phy.16S -o $OUT/.log -e $OUT/.log $JOBS \
+  -v GENE=16S,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=rrna \
+  $LAB_HOME/.job/_gene.phylotree.uge-bash)
+if [[ $JID != *submitted* ]]; then
+  echo 'ERROR: improper job submission' >&2
+  exit 1
+fi
+echo "$JID" >> "$JOB_IDS"
+
+# Product name instead of gene name tree
+JID=$(qsub -q all.q -pe smp 1-128 -N phy.recA -o $OUT/.log -e $OUT/.log $JOBS \
+  -v PROD='recombinase A',GENE=recA,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=product \
+  $LAB_HOME/.job/_gene.phylotree.uge-bash)
+if [[ $JID != *submitted* ]]; then
+  echo 'ERROR: improper job submission' >&2
+  exit 1
+fi
+echo "$JID" >> "$JOB_IDS"
+JID=$(qsub -q all.q -pe smp 1-128 -N phy.secA -o $OUT/.log -e $OUT/.log $JOBS \
+  -v PROD='preprotein translocase subunit SecA',LOGFILE=$LOGFILE,EXTRN=product\
+  -v GENE=secA,OUT=$OUT \
+  $LAB_HOME/.job/_gene.phylotree.uge-bash)
+if [[ $JID != *submitted* ]]; then
+  echo 'ERROR: improper job submission' >&2
+  exit 1
+fi
+echo "$JID" >> "$JOB_IDS"
+
+# Make trees and %nucl similarity matrices for genes found in GenBank files
+for g in atpD dnaJ glnA groL rpoA rpoB rpoC sodA tuf pheS thrC; do
+  JID=$(qsub -q all.q -pe smp 1-128 -N phy.$g -o $OUT/.log -e $OUT/.log \
+    $JOBS -v GENE=$g,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=gene \
+    $LAB_HOME/.job/_gene.phylotree.uge-bash)
+  if [[ $JID != *submitted* ]]; then
+    echo 'ERROR: improper job submission' >&2
+    exit 1
+  fi
+  echo "$JID" >> "$JOB_IDS"
+done
