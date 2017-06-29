@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+
+
+# Help
+if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+  echo 'this script is not meant to be executed directly'
+  exit 0
+fi
+
+# Input requirements
+source $HOME/.bashrc
+source /etc/profile.d/modules.sh
+if [[ -z "$LAB_HOME" ]]; then
+  echo 'ERROR: $LAB_HOME not set' >&2
+  exit 1
+fi
+if [[ -z "$ASM_DIR" || -z "$O" ]]; then
+  echo 'ERROR: ASM_DIR O (2 variables required)' >&2
+  exit 1
+fi
+
+# Test if >2 sequence files
+shopt -s nullglob
+ASSEMS=( $ASM_DIR/*.fna )
+shopt -u nullglob
+if [ ${#ASSEMS[@]} -lt 3 ]; then
+  echo 'ERROR: at least 3 genomes are required for ANIb clustering analysis' >&2
+  exit 1
+fi
+echo "${#ASSEMS[@]} genomes will be processed..."
+
+# Setup dir structure
+mkdir -p $O/ani
+
+[[ "${ASSEMS[@]}" =~ "," ]] && { usage; exit 1; }
+echo -e "[ASSEMBLIES]\n$(echo ${ASSEMS[@]} | tr ' ' '\n')\n" |\
+  tee -a "$O"/.log/log.txt
+
+COMBO=()
+for A in "${!ASSEMS[@]}"; do
+  for B in "${!ASSEMS[@]}"; do
+    if [[ $A != $B && ! ${COMBO[@]} =~ "${ASSEMS[$B]},${ASSEMS[$A]}" ]]; then
+      COMBO+=(${ASSEMS[$A]},${ASSEMS[$B]})
+    fi
+  done
+done
+
+echo "Submitting ${#COMBO[@]} bidirectional ANI query jobs..."
+JOBS=$(cat "$O"/.log/job_ids.txt | cut -f 3 -d ' ' | sed -e 's/$/,/' |\
+  tr -d '\n' | sed -e 's/,$//')
+for C in "${COMBO[@]}"; do
+  C1=${C%%,*}
+  C2=${C##*,}
+  D1=$(basename ${C1%.*} | sed 's/[_-\.\(\)]//g')
+  D2=$(basename ${C2%.*} | sed 's/[_-\.\(\)]//g')
+  JID=$(qsub -q all.q -pe smp 1-128 -N ani.$D1$D2 -o $O/.log -e $O/.log\
+    -hold_jid $JOBS -v S1=$ASM_DIR/$D1.fna,S2=$ASM_DIR/$D2.fna,O=$O/ani\
+    $LAB_HOME/.job/_ani.run.uge-bash)
+  [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
+  echo "$JID" >> "$O"/.log/job_ids.txt
+done
+sleep 0.5
+
+echo "Submitting ANI summary job..."
+JOBS=$(cat "$O"/.log/job_ids.txt | cut -f 3 -d ' ' | sed -e 's/$/,/' |\
+  tr -d '\n' | sed -e 's/,$//')
+JID=$(qsub -q all.q -N ani.sum -o $O/.log -e $O/.log -hold_jid $JOBS\
+  -v P=$O/ani $LAB_HOME/.job/_ani.summarize.uge-bash)
+[[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }

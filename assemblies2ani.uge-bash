@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+
+
+function usage() { 
+  echo "
+Usage: ${0##*/} InputDirectory [OutputDirectory] [-h|--help]
+
+Required:
+  <InputDirectory>   All assembly files ending in fa,fas,
+                     fsa,fna,fasta will be analyzed.
+                     Commas are forbidden in filenames.
+
+Optional:
+  -h | --help        Show this help message and exit.
+
+  <OutputDirectory>  Location for the output files, which
+                     includes job logfiles. Output files
+                     will be overwritten if already present.
+                     Default: current working directory.
+
+  "
+  }
+
+# Requirements
+command -v qsub >/dev/null 2>&1 || { echo 'ERROR: qsub not found' >&2; exit 1; }
+[[ $1 == "--help" || $1 == "-h" ]] && { usage; exit 0; }
+if [[ $# -lt 1  || $# -gt 2 ]]; then
+  echo "ERROR: improper number ("$#") of arguments provided" >&2
+  usage
+  exit 1
+fi
+source $HOME/.bashrc
+if [[ -z "$LAB_HOME" ]]; then
+  echo 'ERROR: $LAB_HOME not set' >&2
+  exit 1
+fi
+
+# I/O handling
+IN=$(readlink -f "$1")
+if [[ -z "$2" ]]; then
+  OUT="${PWD}"
+else
+  OUT=$(readlink -f "$2")
+fi
+[ ! -d "$OUT"/.log ] && mkdir -pv "$OUT"/.log > /dev/null
+
+# Log system and user info for debugging
+echo "[START]           $(date)" > "$OUT"/.log/log.txt
+echo "[SYS]             $(uname -nro)" >> "$OUT"/.log/log.txt
+echo "[USER]            $USER" >> "$OUT"/.log/log.txt
+echo "[CWD]             $PWD" >> "$OUT"/.log/log.txt
+source /etc/profile.d/modules.sh && module purge
+echo "[MODULES LOADED]  $(module list 2>&1 | \
+  sed 's/Currently Loaded Modulefiles://1')" >> "$OUT"/.log/log.txt
+echo -e "[PATH]            $PATH\n" >> "$OUT"/.log/log.txt
+echo "[I/O]" >> "$OUT"/.log/log.txt
+echo "Input directory:  $IN" | tee -a "$OUT"/.log/log.txt
+echo -e "Output directory: $OUT\n" | tee -a "$OUT"/.log/log.txt
+
+cd $IN
+shopt -s nullglob
+ASM=( *.{fa,fas,fsa,fna,fasta} )
+shopt -u nullglob
+[[ "${ASM[@]}" =~ "," ]] && { usage; exit 1; }
+echo -e "[ASSEMBLIES]\n$(echo ${ASM[@]} | tr ' ' '\n')\n" | \
+  tee -a "$OUT"/.log/log.txt
+
+if [ ${#ASM[@]} -lt 3 ]; then
+  echo 'ERROR: at least 3 genomes are required for batch analysis' >&2
+  exit 1
+fi
+
+cd $OUT
+echo "Annotating ${#ASM[@]} genomes..."
+echo -n '' > "$OUT"/.log/job_ids.txt
+for A in "${ASM[@]}"; do
+  B=$(basename ${A%\.*} | sed 's/[_-\.\(\)]//g')
+  F=$(printf '%q\n' $IN/$A)
+  JID=$(qsub -q all.q -pe smp 1-128 -N ann.$B -o $OUT/.log -e $OUT/.log <<- EOF
+	source /etc/profile.d/modules.sh
+	module load perl/5.16.1-MT prokka/1.8
+	prokka --outdir $OUT/$B --prefix $B --addgenes --locustag $B \
+		--mincontiglen 1000 --evalue 1e-06 --cpus \$NSLOTS --force $F
+	module unload perl/5.16.1-MT prokka/1.8
+	EOF
+	)
+  [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
+  echo "$JID" >> "$OUT"/.log/job_ids.txt
+done
+
+COMBO=()
+for A in "${!ASM[@]}"; do
+  for B in "${!ASM[@]}"; do
+    if [[ $A != $B && ! ${COMBO[@]} =~ "${ASM[$B]},${ASM[$A]}" ]]; then
+      COMBO+=(${ASM[$A]},${ASM[$B]})
+    fi
+  done
+done
+
+echo "Submitting ${#COMBO[@]} bidirectional ANI query jobs..."
+JOBS=$(cat "$OUT"/.log/job_ids.txt | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
+  tr -d '\n' | sed -e 's/,$//')
+for C in "${COMBO[@]}"; do
+  C1=${C%%,*}
+  C2=${C##*,}
+  D1=$(basename ${C1%.*} | sed 's/[_-\.\(\)]//g')
+  D2=$(basename ${C2%.*} | sed 's/[_-\.\(\)]//g')
+  JID=$(qsub -q all.q -pe smp 1-128 -N ani.$D1$D2 -o $OUT/.log -e $OUT/.log \
+    -hold_jid $JOBS -v S1=$OUT/$D1/$D1.fna,S2=$OUT/$D2/$D2.fna,O=$OUT \
+    $LAB_HOME/.job/_ani.run.uge-bash)
+  [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
+  echo "$JID" >> "$OUT"/.log/job_ids.txt
+done
+sleep 0.5
+
+echo "Submitting ANI summary job..."
+JOBS=$(cat "$OUT"/.log/job_ids.txt | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
+  tr -d '\n' | sed -e 's/,$//')
+JID=$(qsub -q all.q -N ani.sum -o $OUT/.log -e $OUT/.log -hold_jid $JOBS \
+  -v P=$OUT $LAB_HOME/.job/_ani.summarize.uge-bash)
+[[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
+echo 'All jobs submitted, so you can logout and check back later!'
