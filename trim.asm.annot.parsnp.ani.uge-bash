@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+
+
+if [[ "$1" == "" || "$1" == "--help" || "$1" == "-h" ]]; then
+  echo """
+  Usage: `basename $0` <input-dir> <output-dir>
+  
+  <input-dir> must be a path containing PE Illumina 1.8+ files as *.fastq.gz
+  
+  Sample names are extracted from the first underscore of read files. Hyphens,
+  periods, and commas are automatically discarded from the name to avoid errors.
+  WARNING: If you have HiSeq data where samples are ran on more than one lane, 
+  be sure to concatenate them.
+
+  Sample pairing of sister reads is done by consecutively using filenames sorted
+  with \`ls\`, which flexibly allows for naming other than traditional R1 and R2.
+  Verify that files properly will pair by checking the output order of \`ls\`
+  within the <input-dir>.
+  
+  <output-dir> must be an empty path where all data will be saved. The full path
+  is automatically created, so making it is unnecessary.
+  
+  Output directory structure:
+    asm/
+        <sampleA>.fna
+        <sampleB>.fna
+        <sampleC>.fna
+    ani/
+        ANI.Summary.tab
+        ANI--<sampleA>,<sampleB>/
+            ani.<sampleA>,<sampleB>.stats.tab
+            blast.<sampleA>,<sampleB>.tab
+            blast.<sampleB>,<sampleA>.tab
+        ANI--<sampleA>,<sampleC>/
+            ani.<sampleA>,<sampleC>.stats.tab
+            blast.<sampleA>,<sampleC>.tab
+            blast.<sampleC>,<sampleA>.tab
+        ANI--<sampleB>,<sampleC>/
+            ani.<sampleB>,<sampleC>.stats.tab
+            blast.<sampleB>,<sampleC>.tab
+            blast.<sampleC>,<sampleB>.tab
+    annot/
+        <sampleA>.gbk
+        <sampleB>.gbk
+        <sampleC>.gbk
+    parsnp/
+        SNPs.fa
+        SNPs.vcf
+        parsnp.tre
+    qa/
+        Summary.Assemblies.tab
+        Summary.CleanedReads.Phred20.tab
+    trim_reads/
+        <sampleA>_R1.paired.fq.gz
+        <sampleA>_R2.paired.fq.gz
+        <sampleA>.single.fq.gz
+        <sampleB>_R1.paired.fq.gz
+        <sampleB>_R2.paired.fq.gz
+        <sampleB>.single.fq.gz
+        <sampleC>_R1.paired.fq.gz
+        <sampleC>_R2.paired.fq.gz
+        <sampleC>.single.fq.gz
+"""
+  exit 0
+fi
+
+# Input requirements
+source $HOME/.bashrc
+if [[ -z "$LAB_HOME" ]]; then
+  echo 'ERROR: $LAB_HOME not set' >&2
+  exit 1
+fi
+if [ $# -ne 2 ]; then
+  echo 'ERROR: 2 arguments required\nUsage: $0 <input-dir> <output-dir>' >&2
+  exit 1
+fi
+INDIR=$(readlink -f $1)
+OUTDIR=$(readlink -f $2)
+
+# Test if even number of sequence files
+shopt -s nullglob
+READS=( $INDIR/*.fastq.gz )
+shopt -u nullglob
+if [[ $((${#READS[@]} % 2)) -ne 0 ]]; then
+  echo "ERROR: uneven number (${#READS[@]}) of FastQ files" >&2
+  exit 1
+fi
+if [ ${#READS[@]} -lt 1 ]; then
+  echo 'ERROR: no read sets found' >&2
+  exit 1
+fi
+
+# Generate annotated assemblies for all input read pairs
+mkdir -p $OUTDIR/.log
+echo 'Generating annotated assemblies for:'
+for (( i=0; i<${#READS[@]}; i+=2 )); do
+  read1=${READS[i]}
+  read2=${READS[i+1]}
+  b1=$(basename $read1 | cut -d _ -f 1 | sed 's/[-\.,]//g')
+  b2=$(basename $read2 | cut -d _ -f 1 | sed 's/[-\.,]//g')
+  if [ "$b1" != "$b2" ]; then
+    echo "ERROR: improperly paired $b1 $b2" >&2
+    exit 1
+  fi
+  echo "  $b1"
+  job_id=$(qsub -q all.q -pe smp 1-128 -N TrimAsmAnnot.$b1 -e $OUTDIR/.log\
+    -o $OUTDIR/.log -v R1=$read1,R2=$read2,B=$b1,O=$OUTDIR\
+    $LAB_HOME/.job/_trim.asm.annot.uge-bash)
+  echo "$job_id" >> $OUTDIR/.log/job_ids.txt
+done
+
+# Summarize reads and assemblies
+csv_jobs=$(cat $OUTDIR/.log/job_ids.txt | cut -f 3 -d ' ' |\
+  sed -e 's/$/,/' | tr -d '\n' | sed -e 's/,$//')
+a=$OUTDIR/asm
+r=$OUTDIR/trim_reads
+qsub -q all.q -pe smp 1-128 -N QA.reads.asm -e $OUTDIR/.log -o $OUTDIR/.log\
+ -hold_jid $csv_jobs -v ASM_DIR=$a,TRIM_DIR=$r,O=$OUTDIR\
+ $LAB_HOME/.job/_summarize.FastQ.FastA.uge-bash
+
+# Exit after annotating assemblies if < 3 samples
+[ ${#READS[@]} -lt 3 ] && { exit 0; }
+
+# Compute ANI values
+qsub -q all.q -pe smp 1-128 -N ANI -e $OUTDIR/.log -o $OUTDIR/.log\
+ -hold_jid $csv_jobs -v ASM_DIR=$a,O=$OUTDIR\
+ $LAB_HOME/.job/_ani.uge-bash
+
+# Call SNPs from assembled genomes
+g=$OUTDIR/annot
+qsub -q all.q -pe smp 1-128 -N Parsnp -e $OUTDIR/.log -o $OUTDIR/.log\
+ -hold_jid $csv_jobs -v ASM_DIR=$a,GBK_DIR=$g,O=$OUTDIR\
+ $LAB_HOME/.job/_parsnp.uge-bash
