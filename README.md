@@ -16,14 +16,18 @@ tested on UGE 8.4.3 but might also work on other UGE, SGE, and OGE scheduler ver
     echo 'export PATH="$LAB_HOME/.job:$LAB_HOME/.bin:$PATH"' >> ~/.bashrc
 
 ### Batch Job Workflows
+- ##### PacBio (with or without corresponding Illumina) reads to annotated assembly
+  - Given a directory of PacBio read files, each sample will have its genome assembled and annotated. If Illumina PE reads are also provided, assemblies will be polished.
+  - Usage: `pacbio-illumina.cln.asm.ann.uge-bash <input-dir> <output-dir>`
+
 - ##### Illumina PE reads v1.8+ to annotated assembly
- - Given a directory of paired read files, each sample will have its genome assembled and annotated. If 3 or more samples are provided, Parsnp and ANI will be computed as well.
- - Usage: `trim.asm.annot.parsnp.ani.uge-bash <input-dir> <output-dir>`
+  - Given a directory of paired Illumina read files, each sample will have its genome assembled and annotated. If 3 or more samples are provided, Parsnp and ANI will be computed as well.
+  - Usage: `trim.asm.annot.parsnp.ani.uge-bash <input-dir> <output-dir>`
 
 - ##### Single gene trees from assemblies
- - Given a directory of FastA assembly files, a series of genes will be extracted from each and NJ trees constructed. Target genes include:  the 16S rRNA gene, *atpD*, *dnaJ*, *glnA*, *groL*, *recA*, *rpoA*, *rpoB*, *rpoC*, *secA*, *sodA*, *tuf*, *pheS*, and *thrC*.
- - Usage: `assemblies2phylotrees.uge-bash <input-dir> <output-dir>`
+  - Given a directory of FastA assembly files, a series of genes will be extracted from each and NJ trees constructed. Target genes include:  the 16S rRNA gene, *atpD*, *dnaJ*, *glnA*, *groL*, *recA*, *rpoA*, *rpoB*, *rpoC*, *secA*, *sodA*, *tuf*, *pheS*, and *thrC*.
+  - Usage: `assemblies2phylotrees.uge-bash <input-dir> <output-dir>`
 
 - ##### ANI from assemblies
- - Given a directory of FastA assembly files, all pairwise ANI comparisons will be computed and the bidirectional values summarized.
- - Usage: `assemblies2ani.uge-bash <input-dir> <output-dir>`
+  - Given a directory of FastA assembly files, all pairwise ANI comparisons will be computed and the bidirectional values summarized.
+  - Usage: `assemblies2ani.uge-bash <input-dir> <output-dir>`
