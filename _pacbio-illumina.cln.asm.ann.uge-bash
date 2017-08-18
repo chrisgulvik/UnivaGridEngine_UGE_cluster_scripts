@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+
+
+# Input requirements
+source $HOME/.bashrc
+source /etc/profile.d/modules.sh && module purge
+if [[ -z "$LAB_HOME" ]]; then
+  echo 'ERROR: $LAB_HOME not set' >&2
+  exit 1
+fi
+export PATH=$LAB_HOME/.anaconda2/bin:$PATH
+if [[ -z "$B" || -z "$O" ]]; then
+  echo 'ERROR: B O (2 variables required)' >&2
+  exit 1
+fi
+source "$O"/.log/"$B".cfg;
+if [[ -z "$PBIOFILES" ]]; then
+  echo "ERROR: PBIOFILES need to be set in $O/.log/$B.cfg" >&2
+  exit 1
+fi
+pbioFastQ="$O/trim_reads/$B.pacbio.len.fq.gz"
+
+# No matter how many PacBio runs per sample, output a single FastQ
+# skip bas.h5 in case absent; cannot specify outpath so use tmp dir
+cd $O/.tmp
+module load gnu_parallel/2017 
+source activate bpy2pacbio
+pbioFilesArr=($(echo "$PBIOFILES" | sed 's/"//g'))
+export B
+parallel --halt now,fail=1 bash5tools.py --verbose \
+ --outFilePrefix ${B}.{#} --readType unrolled --outType fastq \
+ --minLength 5000 {1} ::: "${pbioFilesArr[@]}"
+source deactivate
+module unload gnu_parallel/2017
+cat ${B}*.fastq > ${B}.pacbio.len.fq
+if [[ ! $(find "${B}.pacbio.len.fq" -type f -size +300M) ]]; then
+  echo "ERROR: pacbio reads unexpectedly small for $B" >&2
+  exit 1
+fi
+rm ${B}*.fastq
+pigz -9f ${B}.pacbio.len.fq
+mv -f ${B}.pacbio.len.fq.gz "$pbioFastQ"
+
+# If genome size is absent in config file, estimate it
+if [[ -z "$GSIZE" ]]; then
+  module load minimap/0.2 miniasm/0.1
+  bases=$(minimap -w 5 -m 0 -L 1500 -S -t $NSLOTS $pbioFastQ $pbioFastQ | \
+   miniasm -f $pbioFastQ - | awk '/^S/{printf "%s", $3}' | wc -c)
+  module unload minimap/0.2 miniasm/0.1
+  if [ "$bases" -lt 2000000 ]; then
+    echo "ERROR: estimated genome size ($bases bp) unusually small for $B" >&2
+    exit 1
+  elif [ "$bases" -gt 9000000 ]; then
+    echo "ERROR: estimated genome size ($bases bp) unusually large for $B" >&2
+    exit 1
+  fi
+  GSIZE=$(echo "scale=3;${bases}/1000000" | bc)
+fi
+
+# Assemble with Canu
+module load canu/1.6 gnuplot/5.0.3
+canu genomeSize="${GSIZE}"m correctedErrorRate=0.045 minReadLength=5000 \
+ corMinCoverage=3 corOutCoverage=500 saveReadCorrections=true \
+ saveMerCounts=true -p $B -d $O/asm/canu_"$B" \
+ useGrid=false -pacbio-raw "$pbioFastQ"
+ # gridOptions="-V -q all.q -S /bin/bash -e $O/.log -o $O/.log" \
+ # gridEngineThreadsOption="-pe smp THREADS" \
+ # gridEngineMemoryOption="-l m_mem_free=MEMORY"
+module unload canu/1.6 gnuplot/5.0.3
+
+# Verify sufficient bacterial genome size
+for tig in contigs unitigs; do
+  if [[ ! $(find $O/asm/canu_"$B"/"$B".$tig.fasta -type f -size +2M) ]] || \
+   [[ ! -f $O/asm/canu_"$B"/"$B".$tig.fasta ]]; then
+    echo "ERROR: genome assembly unusually small for $B $tig" >&2
+    echo "       check $O/asm/canu_$B/canu-logs for details" >&2
+    exit 1
+  fi
+done
+mv -f $O/asm/canu_$B/$B.trimmedReads.fasta.gz \
+ $O/trim_reads/$B.pacbio.len.corr-trim.fa.gz
+mkdir $O/asm/$B
+pigz -9cf $O/asm/canu_$B/$B.unassembled.fasta > $O/asm/$B/$B.unassem.fa.gz
+mv -f $O/asm/canu_$B/$B.{con,uni}tigs.fasta $O/asm/$B
+mv -f $O/asm/canu_$B/$B.{con,uni}tigs.gfa $O/asm/$B
+mv -f $O/asm/canu_$B/$B.{con,uni}tigs.layout.readToTig $O/asm/$B
+rm -rf $O/asm/canu_$B
+
+# Single round PacBio read correction
+module load minimap/0.2 racon/0.5.0
+for tig in contigs unitigs; do
+  minimap -w 5 -m 0 -L 500 -S -t $NSLOTS $O/asm/"$B"/"$B".$tig.fasta \
+   $O/trim_reads/"$B".pacbio.len.fq.gz | racon -t $NSLOTS --erc \
+   $O/trim_reads/"$B".pacbio.len.fq.gz - $O/asm/"$B"/"$B".$tig.fasta \
+   $O/asm/"$B"/"$B".$tig.racon.fa
+  mv -f $O/asm/"$B"/"$B".$tig.racon.fa $O/asm/"$B"/"$B".$tig.fasta
+done
+module unload minimap/0.2 racon/0.5.0
+
+# Attempt to circularize tigs, trim overhangs, and re-orient to dnaA
+module load circlator/1.5.1 canu/1.6
+for tig in contigs unitigs; do
+  circlator all --verbose --threads $NSLOTS --assemble_not_careful \
+   --b2r_discard_unmapped $O/asm/"$B"/"$B".$tig.fasta \
+   $O/trim_reads/"$B".pacbio.len.corr-trim.fa.gz $O/asm/"$B"/circlator_"$B".$tig
+  circ_asm=$O/asm/"$B"/circlator_"$B"."$tig"/06.fixstart.fasta
+  if [[ ! $(find "$circ_asm" -type f -size +2M) ]] || \
+   [[ ! -f "$circ_asm" ]]; then
+    echo "ERROR: genome assembly after circ attempt unusually small for $B" >&2
+    echo "       check $O/asm/canu_$B/canu-logs for details" >&2
+    exit 1
+  fi
+done
+module unload circlator/1.5.1 canu/1.6
+
+# Summarize and cleanup circ efforts
+echo -e "# Sample\tType\tDefline\tLength[bp]\tGC[%]\tCirc-Status" > \
+ $O/qa/Summary.asm-circ.tab
+source activate bpy2
+for tig in contigs unitigs; do
+  python $LAB_HOME/.bin/summarize.circlator.tigs.py \
+   -i $O/asm/"$B"/circlator_"$B".$tig/06.fixstart.fasta \
+   -l $O/asm/"$B"/circlator_"$B".$tig/04.merge.circularise.log >> \
+   $O/.tmp/asm-circ.tab
+  while read -r line; do
+    echo -e "${B}\t${tig}\t${line}" >> $O/qa/Summary.asm-circ.tab
+  done < $O/.tmp/asm-circ.tab
+  rm -f $O/.tmp/asm-circ.tab
+  mv -f $O/asm/"$B"/circlator_"$B".$tig/06.fixstart.fasta \
+   $O/asm/"$B".$tig.circ.uncorr.fna
+  rm -f $O/asm/"$B"/circlator_"$B".$tig/06.fixstart.detailed.log
+  cat $O/asm/"$B"/circlator_"$B".$tig/*.log | \
+   pigz -9cf > $O/asm/"$B"/"$B".$tig.circ.log.gz
+  rm -rf $O/asm/"$B"/circlator_"$B".$tig
+done
+source deactivate
+
+# Calculate PacBio read coverage
+module load bwa/0.7.15 samtools/1.4.1 BEDTools/2.26.0
+for tig in contigs unitigs; do
+  bwa index $O/asm/"$B".$tig.circ.uncorr.fna
+  bwa mem -v 2 -x pacbio -t $NSLOTS $O/asm/"$B".$tig.circ.uncorr.fna \
+   $O/trim_reads/"$B".pacbio.len.fq.gz | samtools sort \
+   --threads $NSLOTS --reference $O/asm/"$B".$tig.circ.uncorr.fna -O BAM \
+   -o $O/asm/"$B".$tig.circ.uncorr.sort.bam
+  rm $O/asm/"$B".$tig.circ.uncorr.fna.{bwt,pac,ann,amb,sa}
+  bedtools genomecov -d -split -ibam $O/asm/"$B".$tig.circ.uncorr.sort.bam \
+   -g $O/asm/"$B".$tig.circ.uncorr.fna > $O/.tmp/"$B".$tig.cov.txt
+  rm -f $O/asm/"$B".$tig.circ.uncorr.sort.bam
+  awk '{sum+=$3} END{print sum}' $O/.tmp/"$B".$tig.cov.txt > \
+   $O/.tmp/"$B".$tig.sum_cov.txt
+  echo -ne "${B}.${tig}\t" >> $O/qa/Summary.pacbio-cov.tab
+  cat $O/.tmp/"$B".$tig.sum_cov.txt >> $O/qa/Summary.pacbio-cov.tab
+  rm -f $O/.tmp/"$B".$tig.{cov,sum_cov}.txt
+done
+module unload bwa/0.7.15 samtools/1.4.1 BEDTools/2.26.0
+
+# Polish if Illumina read set available
+if [[ -n "${R1// }" && -n "${R2// }" ]]; then
+  # Remove PhiX
+  module load java/jdk1.8.0_92 bbmap
+  PHIX=$LAB_HOME/.lib/PhiX_NC_001422.1.fasta
+  bbduk.sh -Xmx20g threads=$NSLOTS k=31 hdist=1 ref="$PHIX" \
+   in="$R1" in2="$R2" \
+   out=$O/trim_reads/"$B"-noPhiX-R1.fsq \
+   out2=$O/trim_reads/"$B"-noPhiX-R2.fsq \
+   overwrite=t
+  module unload java/jdk1.8.0_92 bbmap
+
+  # Adapter clip and quality trim
+  module load java/jdk1.8.0_92 trimmomatic/0.35
+  ADAPTERS=$LAB_HOME/.lib/adapters_Nextera_NEB_TruSeq_NuGEN.fas
+  trimmomatic PE -phred33 -threads $NSLOTS \
+   $O/trim_reads/"$B"-noPhiX-R1.fsq $O/trim_reads/"$B"-noPhiX-R2.fsq \
+   $O/trim_reads/"$B"_R1.paired.fq $O/trim_reads/"$B"_R1.unpaired.fq \
+   $O/trim_reads/"$B"_R2.paired.fq $O/trim_reads/"$B"_R2.unpaired.fq \
+   ILLUMINACLIP:"$ADAPTERS":2:20:10:8:TRUE \
+   SLIDINGWINDOW:6:30 LEADING:10 TRAILING:10 MINLEN:50
+  rm -f $O/trim_reads/"$B"-noPhiX-R1.fsq $O/trim_reads/"$B"-noPhiX-R2.fsq
+  cat $O/trim_reads/"$B"_R1.unpaired.fq $O/trim_reads/"$B"_R2.unpaired.fq \
+   > $O/trim_reads/"$B".single.fq
+  rm -f $O/trim_reads/"$B"_R1.unpaired.fq $O/trim_reads/"$B"_R2.unpaired.fq
+  module unload java/jdk1.8.0_92 trimmomatic/0.35
+  for suf in _R1.paired.fq _R2.paired.fq ; do
+    if [[ ! $(find $O/trim_reads/"$B""$suf" -type f -size +10M) ]]; then
+      echo "ERROR: trimmed read unusually small for ${B}${suf}" >&2
+      exit 1
+    fi
+  done
+  pigz -9f $O/trim_reads/"$B".single.fq \
+   $O/trim_reads/"$B"_R1.paired.fq \
+   $O/trim_reads/"$B"_R2.paired.fq
+
+  # Correct InDel and SNP errors in PacBio assemblies
+  module load bwa/0.7.15 samtools/1.4.1 pilon/1.22 BEDTools/2.26.0
+  for tig in contigs unitigs; do
+    for _ in {1..3}; do
+      bwa index $O/asm/"$B".$tig.circ.uncorr.fna
+      bwa mem -t $NSLOTS -x intractg -v 3 $O/asm/"$B".$tig.circ.uncorr.fna\
+       $O/trim_reads/"$B"_R1.paired.fq.gz $O/trim_reads/"$B"_R2.paired.fq.gz |\
+       samtools sort -@ $NSLOTS --reference $O/asm/"$B".$tig.circ.uncorr.fna\
+       -l 9 -o $O/asm/"$B".bam
+      rm -f $O/asm/"$B".$tig.circ.uncorr.fna.{ann,amb,bwt,pac,sa}
+      samtools index $O/asm/"$B".bam
+      pilon --genome $O/asm/"$B".$tig.circ.uncorr.fna --frags $O/asm/"$B".bam\
+       --output "$B" --outdir $O/asm --changes --tracks --verbose\
+       --fix snps,indels --mindepth 4
+      rm -f $O/asm/"$B"{*.wig,Pilon.bed}
+      mv -f $O/asm/"$B".fasta $O/asm/"$B".$tig.circ.uncorr.fna
+    done
+    if ! grep -q '_pilon_pilon_pilon' $O/asm/"$B".$tig.circ.uncorr.fna; then
+      echo "ERROR: incomplete Illumina read correction for $B" >&2
+      exit 1
+    fi
+    sed -i 's/_pilon_pilon_pilon//g' $O/asm/"$B".$tig.circ.uncorr.fna
+    mv -f $O/asm/"$B".$tig.circ.uncorr.fna $O/asm/"$B".$tig.circ.polished.fna
+
+    # Calculate Illumina coverage
+    bedtools genomecov -d -split -ibam $O/asm/"$B".bam \
+     -g $O/asm/"$B".$tig.circ.polished.fna > $O/.tmp/"$B".$tig.cov.txt
+    awk '{sum+=$3} END{print sum}' $O/.tmp/"$B".$tig.cov.txt > \
+     $O/.tmp/"$B".$tig.sum_cov.txt
+    echo -ne "${B}.${tig}\t" >> $O/qa/Summary.illumina-cov.tab
+    cat $O/.tmp/"$B".$tig.sum_cov.txt >> $O/qa/Summary.illumina-cov.tab
+    rm -f $O/.tmp/"$B".$tig.{cov,sum_cov}.txt
+  done
+  
+  # Assemble with Unicycler
+  module load ncbi-blast+/2.6.0 SPAdes/3.9.0 bowtie2/2.2.9 \
+   samtools/1.4.1 pilon/1.22 bcftools/1.4.1 racon/0.5.0 ALE/20130717
+  source activate py3unicycler
+  unicycler --threads $NSLOTS --keep 3 --verbosity 2 --linear_seqs 0 \
+   --out $O/asm/unicyc_"$B" -1 $O/trim_reads/"$B"_R1.paired.fq.gz \
+   -2 $O/trim_reads/"$B"_R2.paired.fq.gz -s $O/trim_reads/"$B".single.fq.gz \
+   -l "$pbioFastQ"
+  source deactivate
+  module unload ncbi-blast+/2.6.0 SPAdes/3.9.0 bowtie2/2.2.9 \
+   samtools/1.4.1 pilon/1.22 bcftools/1.4.1 racon/0.5.0 ALE/20130717
+
+  # Save unmapped Illumina reads
+  samtools fastq -f 4 -1 $O/.tmp/"$B"_R1.unmapped.fq \
+   -2 $O/.tmp/"$B"_R2.unmapped.fq $O/asm/"$B".bam
+  rm -f $O/asm/"$B".{bam.bai,bam,changes}
+  module unload bwa/0.7.15 samtools/1.4.1 pilon/1.22 BEDTools/2.26.0
+  if [[ ! $(find $O/.tmp/"$B"_R1.unmapped.fq -type f -size +5M) ]] || \
+   [[ ! $(find $O/.tmp/"$B"_R2.unmapped.fq -type f -size +5M) ]]; then
+    echo "INFO: unmapped Illumina reads too small for downstream analyses"
+    break
+  fi
+
+  # Investigate taxonomic identity of unmapped Illumina reads
+  module load kraken/0.10.5
+  if [[ -z "$KRAKEN_DEFAULT_DB" ]]; then
+    export KRAKEN_DEFAULT_DB=/scicomp/reference/kraken/0.10.5/standard
+  fi
+  kraken --threads $NSLOTS --preload --paired --fastq-input \
+   $O/.tmp/"$B"_R1.unmapped.fq $O/.tmp/"$B"_R2.unmapped.fq | \
+   kraken-report > "$B"_kraken.tab
+  module unload kraken/0.10.5
+  rm -f $O/.tmp/"$B"_R{1,2}.unmapped.fq
+  bash $LAB_HOME/.bin/summarize_kraken.sh "$B"_kraken.tab >> \
+   $O/qa/Summary.tax-unmapped-illumina.tab
+  # TO-DO: cln,asm,tet for unmapped Illumina only too
+
+else
+  echo "INFO: Illumina reads not found for $B"
+fi
+
+# Annotate assemblies
+module load perl/5.16.1-MT prokka/1.8 tbl2asn/25
+for f in "$O"/asm/"$B".*tigs.circ.*.fna; do
+  s=$(basename $f .fna)
+  prokka --outdir $O/annot/"$s" --prefix "$s" \
+   --force --addgenes --locustag "$B" \
+   --evalue 1e-08 --cpus $NSLOTS "$f"
+  mv -f $O/annot/$s/$s.gbf $O/annot/$s.gbk
+  rm -rf $O/annot/$s
+done
+module unload perl/5.16.1-MT prokka/1.8 tbl2asn/25
