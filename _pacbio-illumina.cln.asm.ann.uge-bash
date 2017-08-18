@@ -224,6 +224,7 @@ if [[ -n "${R1// }" && -n "${R2// }" ]]; then
     cat $O/.tmp/"$B".$tig.sum_cov.txt >> $O/qa/Summary.illumina-cov.tab
     rm -f $O/.tmp/"$B".$tig.{cov,sum_cov}.txt
   done
+  module unload bwa/0.7.15 samtools/1.4.1 pilon/1.22 BEDTools/2.26.0
   
   # Assemble with Unicycler
   module load ncbi-blast+/2.6.0 SPAdes/3.9.0 bowtie2/2.2.9 \
@@ -238,10 +239,11 @@ if [[ -n "${R1// }" && -n "${R2// }" ]]; then
    samtools/1.4.1 pilon/1.22 bcftools/1.4.1 racon/0.5.0 ALE/20130717
 
   # Save unmapped Illumina reads
+  module load samtools/1.4.1
   samtools fastq -f 4 -1 $O/.tmp/"$B"_R1.unmapped.fq \
    -2 $O/.tmp/"$B"_R2.unmapped.fq $O/asm/"$B".bam
   rm -f $O/asm/"$B".{bam.bai,bam,changes}
-  module unload bwa/0.7.15 samtools/1.4.1 pilon/1.22 BEDTools/2.26.0
+  module unload samtools/1.4.1
   if [[ ! $(find $O/.tmp/"$B"_R1.unmapped.fq -type f -size +5M) ]] || \
    [[ ! $(find $O/.tmp/"$B"_R2.unmapped.fq -type f -size +5M) ]]; then
     echo "INFO: unmapped Illumina reads too small for downstream analyses"
