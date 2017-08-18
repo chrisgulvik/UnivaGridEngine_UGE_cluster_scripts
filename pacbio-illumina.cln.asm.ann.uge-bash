@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+
+
+if [[ "$1" == "" || "$1" == "--help" || "$1" == "-h" ]]; then
+  echo """
+  Usage: `basename $0` <input-dir> <output-dir>
+
+  <input-dir> must be a path containing PacBio reads as */*.bax.h5.
+  Optionally, if the input-dir contains raw PE Illumina 1.8+ files as
+  *.fastq.gz with sample names that correspond to the PacBio data, the
+  PacBio assemblies will be polished with the Illumina sequence data.
+  Optionally, the input-dir can contain a tab-delimited file
+  'sample.info.tab' listing:  sample names, species name, and the
+  estimated genome size (in Mbp) to skip estimating this information.
+
+  Sample names are extracted from the the second underscore of parent
+  directories of PacBio read files and must be alphanumeric. The sample
+  names are then used to search for any corresponding Illumina reads.
+  If you have Illumina data where samples are ran on more than one lane,
+  merge them. More than one PacBio run is handled automatically.
+
+  Sample pairing of sister reads is done by consecutively using filenames
+  sorted with \`ls\`, which allows for file pairing other than traditional
+  R1 and R2. Verify that files properly will pair by checking the output
+  order of \`ls *.fastq.gz\` within the <input-dir>.
+
+  <output-dir> should be an empty path where all data will be saved.
+  The full path is automatically created. Conflicting files, if using
+  a non-empty output directory, will be overwritten.
+
+  Output directory structure:
+    annot/
+        <sample>.contigs.circ.polished.gbk
+        <sample>.unitigs.circ.polished.gbk
+    asm/
+        <sample>/
+                 <sample>.{con,uni}tigs.{fasta,gfa,layout.readToTig}
+                 <sample>.{con,uni}tigs.circ.log.gz
+                 <sample>.unassem.fa.gz
+        <sample>.contigs.circ.polished.fna
+        <sample>.unitigs.circ.polished.fna
+    qa/
+        Summary.Assemblies.tab
+        Summary.CleanedReads.Phred20.tab
+        Summary.asm-circ.tab
+        Summary.illumina-cov.tab
+        Summary.pacbio-cov.tab
+        Summary.tax-unmapped-illumina.tab
+    trim_reads/
+        <sample>_R1.paired.fq.gz
+        <sample>_R2.paired.fq.gz
+        <sample>.single.fq.gz
+        <sample>.pacbio.len.fq.gz
+        <sample>.pacbio.len.corr-trim.fa.gz
+"""
+  exit 0
+fi
+
+# Input requirements
+source $HOME/.bashrc
+if [[ -z "$LAB_HOME" ]]; then
+  echo 'ERROR: $LAB_HOME not set' >&2
+  exit 1
+fi
+if [ $# -ne 2 ]; then
+  echo 'ERROR: 2 arguments required\nUsage: $0 <input-dir> <output-dir>' >&2
+  exit 1
+fi
+INDIR=$(readlink -f $1)
+OUTDIR=$(readlink -f $2)
+if [[ "$INDIR" == "$OUTDIR" ]]; then
+  echo "ERROR: input ($INDIR) and output ($OUTDIR) cannot be the same" >&2
+  exit 1
+fi
+BASH_VER=$(echo "$BASH_VERSION" | cut -d . -f 1,2 | sed 's/\.//')
+if [ "$BASH_VER" -lt 40 ]; then
+  echo 'ERROR: Bash 4+ required due to associative array use' >&2
+  echo "       $BASH_VERSION" >&2
+  exit 1
+fi
+
+# Setup dir structure
+for d in .log .tmp trim_reads asm annot qa; do
+  [ ! -d "$OUTDIR/$d" ] && mkdir "$OUTDIR/$d"
+done
+echo -n '' > $OUTDIR/.log/job_ids.txt
+
+# Verify PacBio runs have three bax.h5 files each
+shopt -s nullglob
+PBREADS=( $INDIR/*_*/*.bax.h5 )
+shopt -u nullglob
+if [[ "${#PBREADS[@]}" -lt 1 ]]; then
+  echo 'ERROR: no PacBio read sets found' >&2
+  exit 1
+fi
+if [[ $((${#PBREADS[@]} % 3)) -ne 0 ]]; then
+  echo "ERROR: incorrect number (${#PBREADS[@]}) of PacBio read files" >&2
+  exit 1
+fi
+
+# Verify proper sample name grouping and presence in sample.info.tab file
+declare -A UNSORTED
+for (( i=0; i<${#PBREADS[@]}; i+=3 )); do
+  bax1=${PBREADS[i]}
+  bax2=${PBREADS[i+1]}
+  bax3=${PBREADS[i+2]}
+  b1=$(dirname "$bax1" | awk -F/ '{print $NF}')
+  b2=$(dirname "$bax2" | awk -F/ '{print $NF}')
+  b3=$(dirname "$bax3" | awk -F/ '{print $NF}')
+  if [[ "$b1$b2" != "$b2$b3" ]]; then
+    echo "ERROR: improperly grouped $b1 $b2 $b3" >&2
+    exit 1
+  fi
+  sample=$(echo "$b1" | cut -d _ -f 2)
+  val=$(echo "${UNSORTED[$sample]}" | sed 's/"//g' | tr -d '\n')
+  unset UNSORTED["$sample"]
+  UNSORTED+=(["$sample"]=\""$bax1 $bax2 $bax3 $val"\")
+done
+IFS=$'\n'
+SAMPLES=($(echo "${!UNSORTED[@]}" | tr ' ' '\n' | sort))
+unset IFS
+
+# Test if even number of Illumina sequence files
+shopt -s nullglob
+ILREADS=( $INDIR/*.fastq.gz )
+shopt -u nullglob
+if [[ $((${#ILREADS[@]} % 2)) -ne 0 ]]; then
+  echo "ERROR: uneven number (${#ILREADS[@]}) of FastQ files" >&2
+  echo '       Single-end Illumina reads are unsupported.' >&2
+  exit 1
+fi
+
+# Send off jobs to trim, assemble, and annotate
+echo 'Generating annotated assemblies for:'
+for s in "${SAMPLES[@]}"; do
+  echo "PBIOFILES=${UNSORTED[$s]}" > "$OUTDIR"/.log/"$s".cfg
+
+  # If genome size given, use it
+  if grep -q "^$sample" "$INDIR"/sample.info.tab; then
+    G=$(grep "^$s" "$INDIR"/sample.info.tab | awk -F $'\t' '{print $3}')
+    if [[ "${G%.*}" -lt 2 ]]; then
+      echo "ERROR: genome size ($G Mbp) suspiciously small for $s" >&2
+      exit 1
+    elif [[ "${G%.*}" -gt 9 ]]; then
+      echo "ERROR: genome size ($G Mbp) suspiciously large for $s" >&2
+      exit 1
+    fi
+    echo "GSIZE=$G" >> "$OUTDIR"/.log/"$s".cfg
+  fi
+  # TO-DO: handle species identity (col 2)
+
+  shopt -s nullglob
+  ILL=( $INDIR/*"$s"*.fastq.gz )
+  shopt -u nullglob
+  if [[ "${#ILL[@]}" -ne 0 && "${#ILL[@]}" -ne 2 ]]; then
+    echo 'ERROR: expecting only one paired FastQ read set (gunzip ' >&2
+    echo "       compressed) or no FastQ files at all containing $B" >&2
+    echo "       in *.fastq.gz files within $INDIR" >&2
+    echo "       Found: ${#ILL[@]}" >&2
+    echo -e "       Files:\n${ILL[*]}" >&2
+    exit 1
+  fi
+  echo "R1=${ILL[0]}" >> "$OUTDIR"/.log/"$s".cfg
+  echo "R2=${ILL[1]}" >> "$OUTDIR"/.log/"$s".cfg
+  job_id=$(qsub -q all.q -pe smp 1-128 -N PB.ClnAsmAnn.$s -e $OUTDIR/.log \
+   -o $OUTDIR/.log -v B=$s,O=$OUTDIR \
+   $LAB_HOME/.job/_pacbio-illumina.cln.asm.ann.uge-bash)
+  echo "$job_id" >> $OUTDIR/.log/job_ids.txt
+  echo "  $s"
+done
+
+# Summarize reads and assemblies
+csv_jobs=$(cat $OUTDIR/.log/job_ids.txt | cut -f 3 -d ' ' | \
+ sed -e 's/$/,/' | tr -d '\n' | sed -e 's/,$//')
+a=$OUTDIR/asm
+r=$OUTDIR/trim_reads
+qsub -q all.q -pe smp 1-128 -N QA.reads.asm -e $OUTDIR/.log -o $OUTDIR/.log \
+ -hold_jid $csv_jobs -v ASM_DIR=$a,TRIM_DIR=$r,O=$OUTDIR \
+ $LAB_HOME/.job/_summarize.FastQ.FastA.uge-bash > /dev/null
