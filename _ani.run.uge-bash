@@ -27,9 +27,11 @@ elif [ -s "$O/ANI--$B2,$B1/ani.$B2,$B1.stats.tab" ]; then
   echo "INFO: found precomputed $O/ANI--$B2,$B1/ani.$B2,$B1.stats.tab" >&2
   ANI=$(grep ',' "$O/ANI--$B2,$B1/ani.$B2,$B1.stats.tab" | cut -f 3 | sed 's/%//1')
 fi
-if [[ -v $ANI && "${ANI%.*}" -ge 0 && "${ANI%.*}" -le 100 ]]; then
-  echo 'INFO: found ANI; skipping the comparison' >&2
-  exit 0
+if [[ ! -z $ANI ]]; then
+  if [[ "${ANI%.*}" -ge 0 && "${ANI%.*}" -le 100 ]]; then
+    echo "INFO: found ANI $ANI for $B1,$B2; skipping the comparison" >&2
+    exit 0
+  fi
 fi
 
 source /etc/profile.d/modules.sh
