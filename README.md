@@ -29,5 +29,5 @@ tested on UGE 8.4.3 but might also work on other UGE, SGE, and OGE scheduler ver
   - Usage: `assemblies2phylotrees.uge-bash <input-dir> <output-dir>`
 
 - ##### ANI from assemblies
-  - Given a directory of FastA assembly files, all pairwise ANI comparisons will be computed and the bidirectional values summarized.
+  - Given a directory of FastA assembly files, all pairwise ANI comparisons will be computed and the bidirectional values summarized. If the same output-dir is given to a follow-up analysis, only new pairs will be computed, and all pairs summarized.
   - Usage: `assemblies2ani.uge-bash <input-dir> <output-dir>`
