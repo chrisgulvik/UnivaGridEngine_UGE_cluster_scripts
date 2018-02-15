@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+
+
+# Input requirements
+[[ -z "$P" ]] && { echo 'ERROR: $P not set' >&2; exit 1; }
+
+shopt -s nullglob
+STATS=( "$P"/AAI--*/aai.*,*.stats.tab )
+shopt -u nullglob
+
+if [ ${#STATS[@]} -lt 3 ]; then
+  echo 'ERROR: at least 3 stats files are required to summarize' >&2
+  exit 1
+fi
+
+# Verify each file has data
+for f in "${STATS[@]}"; do
+  lines=$(grep -o '%'$'\t''[0-9]' $f | wc -l)
+  if [ $lines -ne 6 ]; then
+    echo "ERROR: $f lacks data to extract" >&2
+    exit 1
+  fi
+done
+
+# Summarize AAI values
+echo -n '' > "$P"/AAI.Summary.tab
+for f in "${STATS[@]}"; do
+  PAIR=$(basename $f .stats.tab | sed 's/ani\.//1')
+  S1=${PAIR##*,}
+  S2=${PAIR%%,*}
+
+  # bidirectional values
+  PROT=$(grep ',' $f | cut -f 2 | cut -d \/ -f 1 | awk '{print $1/2}')
+  MEAN=$(grep ',' $f | cut -f 3 | sed 's/%//1')
+  STDEV=$(grep ',' $f | cut -f 4 | sed 's/%//1')
+
+  # unidirectional values
+  P1=$(sed -n '3p' $f | cut -f 2 | cut -d \/ -f 1)
+  M1=$(sed -n '3p' $f | cut -f 3 | sed 's/%//1')
+  S1=$(sed -n '3p' $f | cut -f 4 | sed 's/%//1')
+
+  P2=$(sed -n '4p' $f | cut -f 2 | cut -d \/ -f 1)
+  M2=$(sed -n '4p' $f | cut -f 3 | sed 's/%//1')
+  S2=$(sed -n '4p' $f | cut -f 4 | sed 's/%//1')
+
+  echo -e "$S1\t$S2\t$PROT\t$MEAN\t$STDEV\t$P1\t$M1\t$S1\t$P2\t$M2\t$S2" >> "$P"/AAI.Summary.tab
+done
+A='Sample\tSample\tProteins_Used_for_Bidirectional_Calc[#]\tBidirectional_AAI[%]\tBidirectional_StDev[%]'
+B='\tProteins_Used_for_Unidirectional_Calc[#]\tUnidirectional_AAI[%]\tUnidirectional_StDev[%]'
+sed -i "1i ${A}${B}${B}" "$P"/AAI.Summary.tab
+
+# Calculate number of proteins in each
+echo -n '' > "$P"/Num_Proteins_Per_Proteome.tab
+for i in "$P"/*/*.faa; do
+  b=$(basename $i .faa)
+  nr=$(grep '^>' $i | wc -l)
+  echo -e "$b\t$nr" >> "$P"/Num_Proteins_Per_Proteome.tab
+done
+sed -i '1i Proteome\tProteins_Predicted_from_Genome[#]' \
+  "$P"/Num_Proteins_Per_Proteome.tab
+sed -i 's/\.faa//g' "$P"/Num_Proteins_Per_Proteome.tab
+
+# Cleanup
+rm -f "$P"/*/*.{err,ffn,fna,fsa,sqn,tbl,txt}
