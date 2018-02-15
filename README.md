@@ -28,6 +28,10 @@ tested on UGE 8.4.3 but might also work on other UGE, SGE, and OGE scheduler ver
   - Given a directory of FastA assembly files, a series of genes will be extracted from each and NJ trees constructed. Target genes include:  the 16S rRNA gene, *atpD*, *dnaJ*, *glnA*, *groL*, *recA*, *rpoA*, *rpoB*, *rpoC*, *secA*, *sodA*, *tuf*, *pheS*, and *thrC*.
   - Usage: `assemblies2phylotrees.uge-bash <input-dir> <output-dir>`
 
+- ##### AAI from assemblies
+  - Given a directory of FastA assembly files, all pairwise AAI comparisons will be computed and the bidirectional values summarized. If the same output-dir is given to a follow-up analysis, only new pairs will be computed, and all pairs summarized.
+  - Usage: `assemblies2aai.uge-bash <input-dir> <output-dir>`
+
 - ##### ANI from assemblies
   - Given a directory of FastA assembly files, all pairwise ANI comparisons will be computed and the bidirectional values summarized. If the same output-dir is given to a follow-up analysis, only new pairs will be computed, and all pairs summarized.
   - Usage: `assemblies2ani.uge-bash <input-dir> <output-dir>`
