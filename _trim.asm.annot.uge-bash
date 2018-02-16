@@ -17,15 +17,15 @@ fi
 mkdir -p $O/{trim_reads,asm,annot}
 
 # Remove PhiX
-module load java/jdk1.8.0_92 bbmap
+module load java/jdk1.8.0_131 BBMap/35.92
 PHIX=$LAB_HOME/.lib/PhiX_NC_001422.1.fasta
 bbduk.sh -Xmx20g threads=$NSLOTS k=31 hdist=1 ref="$PHIX" in="$R1" in2="$R2"\
  out=$O/trim_reads/"$B"-noPhiX-R1.fsq out2=$O/trim_reads/"$B"-noPhiX-R2.fsq\
  overwrite=t
-module unload java/jdk1.8.0_92 bbmap
+module unload java/jdk1.8.0_131 BBMap/35.92
 
 # Adapter clip and quality trim
-module load java/jdk1.8.0_92 trimmomatic/0.35
+module load java/jdk1.8.0_131 trimmomatic/0.35
 ADAPTERS=$LAB_HOME/.lib/adapters_Nextera_NEB_TruSeq_NuGEN.fas
 trimmomatic PE -phred33 -threads $NSLOTS\
  $O/trim_reads/"$B"-noPhiX-R1.fsq $O/trim_reads/"$B"-noPhiX-R2.fsq\
@@ -37,7 +37,7 @@ rm -f $O/trim_reads/"$B"-noPhiX-R1.fsq $O/trim_reads/"$B"-noPhiX-R2.fsq
 cat $O/trim_reads/"$B"_R1.unpaired.fq $O/trim_reads/"$B"_R2.unpaired.fq\
  > $O/trim_reads/"$B".single.fq
 rm -f $O/trim_reads/"$B"_R1.unpaired.fq $O/trim_reads/"$B"_R2.unpaired.fq
-module unload java/jdk1.8.0_92 trimmomatic/0.35
+module unload java/jdk1.8.0_131 trimmomatic/0.35
 for suff in _R1.paired.fq _R2.paired.fq ; do
   if [[ ! $(find $O/trim_reads/"$B""$suff" -type f -size +25M) ]]; then
     echo "ERROR: trimmed read unusually small for ${B}${suff}" >&2
@@ -59,19 +59,19 @@ done
 # rm $O/trim_reads/"$B".assembled.fastq
 
 # Assemble
-module load SPAdes/3.9.0
+module load SPAdes/3.11.1
 spades.py --pe1-1 $O/trim_reads/"$B"_R1.paired.fq\
  --pe1-2 $O/trim_reads/"$B"_R2.paired.fq\
  --pe1-s $O/trim_reads/"$B".single.fq\
  -o $O/asm/"$B" --phred-offset 33\
- -t $NSLOTS --only-assembler --cov-cutoff auto
+ -t $NSLOTS --only-assembler
+module unload SPAdes/3.11.1
 
 # Clean up asm dir and compress reads
 bash $LAB_HOME/.bin/prune.SPAdes.assembly.dirs.bash $O/asm/"$B"
 pigz --best $O/trim_reads/"$B".single.fq\
  $O/trim_reads/"$B"_R1.paired.fq\
  $O/trim_reads/"$B"_R2.paired.fq
-module unload SPAdes/3.9.0
 
 # Post-process assembly
 export PATH=$LAB_HOME/.anaconda2/bin:$PATH
@@ -90,7 +90,7 @@ if [[ ! $(find $O/asm/"$B".uncorrected.fna -type f -size +2M) ]]; then
 fi
 
 # Correct cleaned contigs with cleaned reads
-module load bwa/0.7.15 samtools/1.3.1 pilon/1.21
+module load bwa/0.7.16 samtools/1.4.1 pilon/1.22
 for _ in {1..3}; do
   bwa index $O/asm/"$B".uncorrected.fna
   bwa mem -t $NSLOTS -x intractg -v 3 $O/asm/"$B".uncorrected.fna\
@@ -107,14 +107,14 @@ for _ in {1..3}; do
   mv -f $O/asm/"$B".fasta $O/asm/"$B".uncorrected.fna
   sed -i 's/_pilon//g' $O/asm/"$B".uncorrected.fna
 done
-module unload bwa/0.7.15 samtools/1.3.1 pilon/1.21
+module unload bwa/0.7.16 samtools/1.4.1 pilon/1.22
 mv -f $O/asm/"$B".uncorrected.fna $O/asm/"$B".fna
 
 # Annotate cleaned and corrected assembly
-module load perl/5.16.1-MT prokka/1.8
+module load perl/5.16.1-MT prokka/1.12
 prokka --outdir $O/annot/"$B" --prefix "$B"\
  --force --addgenes --locustag "$B" --mincontiglen 500\
  --evalue 1e-08 --cpus $NSLOTS $O/asm/"$B".fna
-module unload perl/5.16.1-MT prokka/1.8
+module unload perl/5.16.1-MT prokka/1.12
 mv -f $O/annot/$B/$B.gbf $O/annot/$B.gbk
 rm -rf $O/annot/$B
