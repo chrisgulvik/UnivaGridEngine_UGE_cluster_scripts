@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+
+
+function usage() { 
+  echo "
+Usage: ${0##*/} ParsnpDirectory [-h|--help]
+
+Required:
+  <ParsnpDirectory>  Location where parsnp.ggr input file is
+                     and where output files will go.
+
+Optional:
+  -h | --help        Show this help message and exit.
+  "
+  }
+
+# Requirements
+command -v qsub >/dev/null 2>&1 || { echo 'ERROR: qsub not found' >&2; exit 1; }
+[[ $1 == "--help" || $1 == "-h" ]] && { usage; exit 0; }
+if [[ $# -eq 0  ]]; then
+  PARSNP_DIR="$PWD"
+elif [[ $# -eq 1  ]]; then
+  PARSNP_DIR="$1"
+else
+  echo "ERROR: improper number ("$#") of arguments provided" >&2
+  usage
+  exit 1
+fi
+source $HOME/.bashrc
+if [[ -z "$LAB_HOME" ]]; then
+  echo 'ERROR: $LAB_HOME not set' >&2
+  exit 1
+fi
+
+# Test if gingr file present and not empty
+GGR="$PARSNP_DIR"/parsnp.ggr
+if [ ! -f "$GGR" ]; then
+  echo "ERROR: $GGR file absent" >&2
+  exit 1
+fi
+if [ ! -s "$GGR" ]; then
+  echo "ERROR: $GGR file empty" >&2
+  exit 1
+fi
+
+# Submit the job
+JID=$(qsub -q all.q -pe smp 1-128 -N parsnp.dist-calc \
+  -o $PARSNP_DIR/.log -e $PARSNP_DIR/.log \
+  -v PARSNP_DIR=$PARSNP_DIR \
+  $LAB_HOME/.job/_parsnp-distances.uge-bash)
+[[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
+echo 'The job was submitted, so you can logout and check back later!'

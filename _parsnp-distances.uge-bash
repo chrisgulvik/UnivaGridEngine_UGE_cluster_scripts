@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+
+
+# Help
+if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+  echo 'this script is not meant to be executed directly'
+  exit 0
+fi
+
+# Input requirements
+source $HOME/.bashrc
+source /etc/profile.d/modules.sh
+if [[ -z "$LAB_HOME" ]]; then
+  echo 'ERROR: $LAB_HOME not set' >&2
+  exit 1
+fi
+if [[ -z "$PARSNP_DIR" ]]; then
+  echo 'ERROR: PARSNP_DIR (1 variable required)' >&2
+  exit 1
+fi
+
+# Compute distances
+module load harvest/1.1.3
+harvesttools -i "$GGR" -S "$PARSNP_DIR"/SNPs.fa
+module unload harvest/1.1.3
+module load perl/5.16.1-MT
+perl $LAB_HOME/.bin/pairwiseDistances.pl -n $NSLOTS "$PARSNP_DIR"/SNPs.fa |\
+ sort -k3,3n > "$PARSNP_DIR"/SNP-distances.pairs.tsv
+module unload perl/5.16.1-MT
+python $LAB_HOME/.bin/pairwiseTo2d.py -i "$PARSNP_DIR"/SNP-distances.pairs.tsv \
+ -o "$PARSNP_DIR"/SNP-distances.matrix.tsv --sort
+sed -i "s/\t-/\t0/g" "$PARSNP_DIR"/SNP-distances.matrix.tsv
+
+# Cleanup
+rm -f "$PARSNP_DIR"/{all_mumi.ini,parsnpAligner.ini,parsnp.rec,psnn.ini}
+rm -f "$PARSNP_DIR"/*.fna.ref
+pigz -9f "$PARSNP_DIR"/{SNPs.fa,parsnpAligner.log}
