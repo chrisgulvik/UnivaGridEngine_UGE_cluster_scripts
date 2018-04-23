@@ -14,7 +14,7 @@ if [[ -z "$R1" || -z "$R2" || -z "$B" || -z "$O" ]]; then
 fi
 
 # Setup dir structure
-mkdir -p $O/{trim_reads,asm,annot}
+mkdir -p $O/{trim_reads,asm,annot,qa}
 
 # Remove PhiX
 module load java/jdk1.8.0_131 BBMap/35.92
@@ -58,14 +58,27 @@ done
 # cat $O/trim_reads/"$B".assembled.fastq >> $O/trim_reads/"$B".single.fq
 # rm $O/trim_reads/"$B".assembled.fastq
 
-# Assemble
-module load SPAdes/3.11.1
-spades.py --pe1-1 $O/trim_reads/"$B"_R1.paired.fq\
- --pe1-2 $O/trim_reads/"$B"_R2.paired.fq\
- --pe1-s $O/trim_reads/"$B".single.fq\
- -o $O/asm/"$B" --phred-offset 33\
- -t $NSLOTS --only-assembler
-module unload SPAdes/3.11.1
+# Assemble; quit after 3 failed attempts
+failed=0
+while [[ ! -f $O/asm/"$B"/contigs.fasta ]] && [ $failed -lt 3 ]; do
+  if [ $failed -gt 0 ]; then
+    echo "ERROR: assembly file not produced by SPAdes for $B" >&2
+    mv -f $O/asm/"$B"/spades.log $O/asm/"$B"/"$failed"of3-asm-attempt-failed.spades.log
+    echo "INFO: retrying assembly for $B" >&2
+  fi
+  module load SPAdes/3.11.1
+  spades.py --pe1-1 $O/trim_reads/"$B"_R1.paired.fq\
+   --pe1-2 $O/trim_reads/"$B"_R2.paired.fq\
+   --pe1-s $O/trim_reads/"$B".single.fq\
+   -o $O/asm/"$B" --phred-offset 33\
+   -t $NSLOTS --only-assembler --continue
+  module unload SPAdes/3.11.1
+  ((failed++))
+done
+if [[ ! -f "$O"/asm/"$B"/contigs.fasta ]]; then
+  echo "ERROR: assembly file not produced by SPAdes for $B" >&2
+  exit 1
+fi
 
 # Clean up asm dir and compress reads
 bash $LAB_HOME/.bin/prune.SPAdes.assembly.dirs.bash $O/asm/"$B"
@@ -102,13 +115,23 @@ for _ in {1..3}; do
   pilon --genome $O/asm/"$B".uncorrected.fna --frags $O/asm/"$B".bam\
    --output "$B" --outdir $O/asm --changes --tracks --verbose\
    --fix snps,indels --mindepth 0.50
-  rm -f $O/asm/"$B".{bam.bai,bam,changes,uncorrected.fna}
+  grep -c '-' $O/asm/"$B".changes >> $O/asm/"$B".InDels-corrected.cnt.txt
+  grep -vc '-' $O/asm/"$B".changes >> $O/asm/"$B".SNPs-corrected.cnt.txt
+  rm -f $O/asm/"$B".{changes,uncorrected.fna}
   rm -f $O/asm/"$B"{*.wig,Pilon.bed}
   mv -f $O/asm/"$B".fasta $O/asm/"$B".uncorrected.fna
   sed -i 's/_pilon//g' $O/asm/"$B".uncorrected.fna
 done
 module unload bwa/0.7.16 samtools/1.4.1 pilon/1.22
 mv -f $O/asm/"$B".uncorrected.fna $O/asm/"$B".fna
+
+# Calculate coverage
+module load BEDTools/2.26.0
+sum_cov=$(bedtools genomecov -d -split -ibam $O/asm/"$B".bam \
+ -g $O/asm/"$B".fna | awk '{sum+=$3} END{print sum}')
+module unload BEDTools/2.26.0
+rm -f $O/asm/"$B".{bam.bai,bam}
+echo -e "${B}\t${sum_cov}" >> $O/qa/Summary.Illumina.CleanedReads-MappedBases.tab
 
 # Annotate cleaned and corrected assembly
 module load perl/5.16.1-MT prokka/1.12
