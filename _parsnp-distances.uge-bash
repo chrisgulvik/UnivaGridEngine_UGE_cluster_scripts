@@ -18,6 +18,7 @@ if [[ -z "$PARSNP_DIR" ]]; then
   echo 'ERROR: PARSNP_DIR (1 variable required)' >&2
   exit 1
 fi
+GGR="$PARSNP_DIR"/parsnp.ggr
 
 # Compute distances
 module load harvest/1.1.3

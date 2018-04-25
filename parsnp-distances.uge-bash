@@ -43,6 +43,7 @@ if [ ! -s "$GGR" ]; then
   exit 1
 fi
 [ ! -d "$PARSNP_DIR"/.log ] && mkdir -pv "$PARSNP_DIR"/.log > /dev/null
+LOG_BASE=$(basename $0 .uge-bash)
 LOGFILE="$PARSNP_DIR"/.log/"$LOG_BASE".log.txt
 
 # Log system and user info for debugging
