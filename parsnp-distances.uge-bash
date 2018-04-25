@@ -42,9 +42,20 @@ if [ ! -s "$GGR" ]; then
   echo "ERROR: $GGR file empty" >&2
   exit 1
 fi
+[ ! -d "$PARSNP_DIR"/.log ] && mkdir -pv "$PARSNP_DIR"/.log > /dev/null
+LOGFILE="$PARSNP_DIR"/.log/"$LOG_BASE".log.txt
+
+# Log system and user info for debugging
+echo "[START]           $(date)" > "$LOGFILE"
+echo "[SYS]             $(uname -nro)" >> "$LOGFILE"
+echo "[USER]            $USER" >> "$LOGFILE"
+echo "[CWD]             $PWD" >> "$LOGFILE"
+echo -e "[PATH]            $PATH\n" >> "$LOGFILE"
+echo "[I/O]" >> "$LOGFILE"
+echo -e "Parsnp directory: $PARSNP_DIR\n" | tee -a "$LOGFILE"
 
 # Submit the job
-JID=$(qsub -q all.q -pe smp 1-128 -N parsnp.dist-calc \
+JID=$(qsub -q short.q -pe smp 1-128 -N parsnp.dist-calc \
   -o $PARSNP_DIR/.log -e $PARSNP_DIR/.log \
   -v PARSNP_DIR=$PARSNP_DIR \
   $LAB_HOME/.job/_parsnp-distances.uge-bash)
