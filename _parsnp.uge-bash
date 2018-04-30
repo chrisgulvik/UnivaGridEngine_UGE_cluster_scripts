@@ -36,14 +36,23 @@ mkdir -p $O/parsnp
 LARGEST_SIZE=$(ls -Sr $ASM_DIR/*.fna | tail -n 1)
 REF=$(readlink -f $LARGEST_SIZE)
 
+# Compute distances
 module load harvest/1.1.3
 parsnp -v -x -c -o $O/parsnp -r $REF -d $ASM_DIR -p $NSLOTS
-harvesttools -i $O/parsnp/parsnp.ggr -M $O/parsnp/LCBs.aln.fa
-harvesttools -i $O/parsnp/parsnp.ggr -S $O/parsnp/SNPs.fa
-harvesttools -i $O/parsnp/parsnp.ggr -V $O/parsnp/SNPs.vcf
-module load harvest/1.1.3
+if [[ ! $(find "$O/parsnp/parsnp.ggr" -type f -size +1k) ]]; then
+  echo "ERROR: Parsnp failed; check $O/parsnp/parsnpAligner.log" >&2
+  exit 1
+fi
+harvesttools -i $O/parsnp/parsnp.ggr -S $O/parsnp/
+module unload harvest/1.1.3
+module load perl/5.16.1-MT
+perl $LAB_HOME/.bin/pairwiseDistances.pl -n $NSLOTS $O/parsnp/SNPs.fa |\
+ sort -k3,3n > $O/parsnp/SNP-distance.pairs.tsv
+module unload perl/5.16.1-MT
+python $LAB_HOME/.bin/pairwiseTo2d.py -i $O/parsnp/SNP-distance.pairs.tsv \
+ -o $O/parsnp/SNP-distance.matrix.tsv --sort
+sed -i "s/\t-/\t0/g" $O/parsnp/SNP-distance.matrix.tsv
 
 # Cleanup
-rm -f $O/parsnp/{all_mumi.ini,parsnpAligner.{ini,log},parsnp.{rec,tree},psnn.ini}
+rm -f $O/parsnp/{all_mumi.ini,parsnpAligner.{ini,log},parsnp.{rec,tree},psnn.ini,SNPs.fa}
 rm -f $O/parsnp/*.fna.ref
-pigz --best $O/parsnp/LCBs.aln.fa $O/parsnp/parsnp.xmfa $O/parsnp/SNPs.{fa,vcf}
