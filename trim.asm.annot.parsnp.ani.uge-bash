@@ -21,12 +21,7 @@ if [[ "$1" == "" || "$1" == "--help" || "$1" == "-h" ]]; then
   is automatically created, so making it is unnecessary.
   
   Output directory structure:
-    asm/
-        <sampleA>.fna
-        <sampleB>.fna
-        <sampleC>.fna
     ani/
-        ANI.Summary.tab
         ANI--<sampleA>,<sampleB>/
             ani.<sampleA>,<sampleB>.stats.tab
             blast.<sampleA>,<sampleB>.tab
@@ -39,17 +34,46 @@ if [[ "$1" == "" || "$1" == "--help" || "$1" == "-h" ]]; then
             ani.<sampleB>,<sampleC>.stats.tab
             blast.<sampleB>,<sampleC>.tab
             blast.<sampleC>,<sampleB>.tab
+        ANI.Summary.tab
     annot/
         <sampleA>.gbk
         <sampleB>.gbk
         <sampleC>.gbk
+    asm/
+        <sampleA>/
+            assembly_graph_with_scaffolds.gfa
+            {params.txt,spades.log}.gz
+        <sampleB>/
+            assembly_graph_with_scaffolds.gfa
+            {params.txt,spades.log}.gz
+        <sampleC>/
+            assembly_graph_with_scaffolds.gfa
+            {params.txt,spades.log}.gz
+        nucdiff_<sampleA>/
+            Skesa_Ref-vs-SPAdes.{stats.tsv,{query,ref}_snps.vcf.gz}
+            Skesa_Ref-vs-Unicyc.{stats.tsv,{query,ref}_snps.vcf.gz}
+        nucdiff_<sampleB>/
+            Skesa_Ref-vs-SPAdes.{stats.tsv,{query,ref}_snps.vcf.gz}
+            Skesa_Ref-vs-Unicyc.{stats.tsv,{query,ref}_snps.vcf.gz}
+        nucdiff_<sampleC>/
+            Skesa_Ref-vs-SPAdes.{stats.tsv,{query,ref}_snps.vcf.gz}
+            Skesa_Ref-vs-Unicyc.{stats.tsv,{query,ref}_snps.vcf.gz}
+        <sampleA>.fna
+        <sampleB>.fna
+        <sampleC>.fna
+        {skesa,unicyc}_<sampleA>.fna.gz
+        {skesa,unicyc}_<sampleB>.fna.gz
+        {skesa,unicyc}_<sampleC>.fna.gz
     parsnp/
-        SNPs.fa
-        SNPs.vcf
+        parsnp.ggr
         parsnp.tre
+        SNP-distance.matrix.tsv
+        SNP-distance.pairs.tsv
     qa/
         Summary.Assemblies.tab
-        Summary.CleanedReads.Phred20.tab
+        Summary.Illumina.CleanedReads-Bases.tab
+        Summary.Illumina.CleanedReads-MappedBases.tab
+        Summary.Illumina.GenomeCoverage.tab
     trim_reads/
         <sampleA>_R1.paired.fq.gz
         <sampleA>_R2.paired.fq.gz
