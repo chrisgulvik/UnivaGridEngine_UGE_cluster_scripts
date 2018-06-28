@@ -48,7 +48,7 @@ ERROR: incorrect number (${#READS[@]}) of FastQ files
   exit 1
 fi
 
-echo -n '' > $O/qa/Summary.CleanedReads.Phred20.tab
+echo -n '' > $O/qa/Summary.Illumina.CleanedReads-Bases.tab
 for (( i=0; i<${#READS[@]}; i+=3 )); do
   read1=${READS[i]}
   read2=${READS[i+1]}
@@ -62,9 +62,22 @@ for (( i=0; i<${#READS[@]}; i+=3 )); do
     echo "ERROR: improperly grouped $b1 $b2 $b3" >&2
     exit 1
   fi
-  echo -ne "$b1\t" >> $O/qa/Summary.CleanedReads.Phred20.tab
+  echo -ne "$b1\t" >> $O/qa/Summary.Illumina.CleanedReads-Bases.tab
   # Quantify nucleotides per read set
   zcat $read1 $read2 $single |\
    awk 'BEGIN{SUM=0} {if(NR%4==2){SUM+=length($0)}} END{print SUM}'\
-   >> $O/qa/Summary.CleanedReads.Phred20.tab
+   >> $O/qa/Summary.Illumina.CleanedReads-Bases.tab
 done
+
+# Report coverage
+while IFS=$'\t' read -r -a ln; do
+  basepairs=$(grep ${ln[0]} $O/qa/Summary.Illumina.CleanedReads-MappedBases.tab \
+   2> /dev/null | cut -f 2)
+  if [[ ! "${basepairs}" =~ ^[0-9]+$ ]]; then
+    basepairs=$(grep ${ln[0]} $O/qa/Summary.Illumina.CleanedReads-Bases.tab \
+     | cut -f 2)
+  fi
+  genomelen=${ln[7]}
+  cov=$(echo "scale=1;($basepairs/$genomelen)" | bc)
+  echo -e "${ln[0]}\t${cov}"x >> $O/qa/Summary.Illumina.GenomeCoverage.tab
+done < <(grep -v 'Total length' $O/qa/Summary.Assemblies.tab)
