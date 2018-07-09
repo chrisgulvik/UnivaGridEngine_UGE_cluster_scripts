@@ -23,8 +23,10 @@ pbioFastQ="$O/trim_reads/$B.pacbio.len.fq.gz"
 # No matter how many PacBio runs per sample, output a single FastQ
 # skip bas.h5 in case absent; cannot specify outpath so use tmp dir
 cd $O/.tmp
-module load gnu_parallel/2017 
+module load gnu_parallel/2017
+parallel --version | head -n 1
 source activate bpy2pacbio
+bash5tools.py --version | head -n 1
 pbioFilesArr=($(echo "$PBIOFILES" | sed 's/"//g'))
 export B
 parallel --halt now,fail=1 bash5tools.py --verbose \
@@ -43,22 +45,38 @@ mv -f ${B}.pacbio.len.fq.gz "$pbioFastQ"
 
 # If genome size is absent in config file, estimate it
 if [[ -z "$GSIZE" ]]; then
-  module load minimap/0.2 miniasm/0.1
+  module load minimap2/2.4 miniasm/0.1
+  echo "minimap $(minimap -V | head -n 1)"
+  echo "miniasm $(miniasm -V | head -n 1)"
   bases=$(minimap -w 5 -m 0 -L 1500 -S -t $NSLOTS $pbioFastQ $pbioFastQ | \
    miniasm -f $pbioFastQ - | awk '/^S/{printf "%s", $3}' | wc -c)
-  module unload minimap/0.2 miniasm/0.1
+  module unload minimap2/2.4 miniasm/0.1
   if [ "$bases" -lt 2000000 ]; then
     echo "ERROR: estimated genome size ($bases bp) unusually small for $B" >&2
     exit 1
   elif [ "$bases" -gt 9000000 ]; then
     echo "ERROR: estimated genome size ($bases bp) unusually large for $B" >&2
     exit 1
+  else
+    GSIZE=$(echo "scale=3;${bases}/1000000" | bc)
+    echo "INFO: $GSIZE Mbp genome size estimated for $B"
   fi
-  GSIZE=$(echo "scale=3;${bases}/1000000" | bc)
 fi
+
+# Scrub the reads
+# export PATH=$LAB_HOME/.bin:$PATH # contains DA binaries
+# python3 $LAB_HOME/.bin/dascrubber_wrapper.py -i "$pbioFastQ" \
+#  -g "$GSIZE"M > "$pbioFastQ".scrubbed.fa
+# if [[ ! $(find "$pbioFastQ".scrubbed.fa -type f -size +15M) ]]; then
+#   echo 'ERROR: scrubbed reads unusually small filesize' >&2
+#   exit 1
+# fi
+# pigz -9f "$pbioFastQ".scrubbed.fasta
+# mv -f "$pbioFastQ".scrubbed.fasta.gz "$pbioFastQ"
 
 # Assemble with Canu
 module load canu/1.6 gnuplot/5.0.3
+canu -version | head -n 1
 canu genomeSize="${GSIZE}"m correctedErrorRate=0.045 minReadLength=5000 \
  corMinCoverage=3 corOutCoverage=500 saveReadCorrections=true \
  saveMerCounts=true -p $B -d $O/asm/canu_"$B" \
@@ -87,7 +105,9 @@ mv -f $O/asm/canu_$B/$B.{con,uni}tigs.layout.readToTig $O/asm/$B
 rm -rf $O/asm/canu_$B
 
 # Single round PacBio read correction
-module load minimap/0.2 racon/0.5.0
+module load minimap2/2.4 racon/0.5.0
+echo "minimap $(minimap -V | head -n 1)"
+echo "racon lacks a version print option; using $(which racon)"
 for tig in contigs unitigs; do
   minimap -w 5 -m 0 -L 500 -S -t $NSLOTS $O/asm/"$B"/"$B".$tig.fasta \
    $O/trim_reads/"$B".pacbio.len.fq.gz | racon -t $NSLOTS --erc \
@@ -95,10 +115,12 @@ for tig in contigs unitigs; do
    $O/asm/"$B"/"$B".$tig.racon.fa
   mv -f $O/asm/"$B"/"$B".$tig.racon.fa $O/asm/"$B"/"$B".$tig.fasta
 done
-module unload minimap/0.2 racon/0.5.0
+module unload minimap2/2.4 racon/0.5.0
 
 # Attempt to circularize tigs, trim overhangs, and re-orient to dnaA
 module load circlator/1.5.1 canu/1.6
+echo "circlator $(circlator version 2>&1 | head -n 1)"
+canu -version | head -n 1
 for tig in contigs unitigs; do
   circlator all --verbose --threads $NSLOTS --assemble_not_careful \
    --b2r_discard_unmapped $O/asm/"$B"/"$B".$tig.fasta \
@@ -136,7 +158,10 @@ done
 source deactivate
 
 # Calculate PacBio read coverage
-module load bwa/0.7.15 samtools/1.4.1 BEDTools/2.26.0
+module load bwa/0.7.16 samtools/1.4.1 BEDTools/2.26.0
+echo "bwa $(bwa 2>&1 | grep '^Version')"
+echo "samtools $(samtools 2>&1 | grep '^Version')"
+bedtools --version | head -n 1
 for tig in contigs unitigs; do
   bwa index $O/asm/"$B".$tig.circ.uncorr.fna
   bwa mem -v 2 -x pacbio -t $NSLOTS $O/asm/"$B".$tig.circ.uncorr.fna \
@@ -153,22 +178,24 @@ for tig in contigs unitigs; do
   cat $O/.tmp/"$B".$tig.sum_cov.txt >> $O/qa/Summary.pacbio-cov.tab
   rm -f $O/.tmp/"$B".$tig.{cov,sum_cov}.txt
 done
-module unload bwa/0.7.15 samtools/1.4.1 BEDTools/2.26.0
+module unload bwa/0.7.16 samtools/1.4.1 BEDTools/2.26.0
 
 # Polish if Illumina read set available
 if [[ -n "${R1// }" && -n "${R2// }" ]]; then
   # Remove PhiX
-  module load java/jdk1.8.0_92 bbmap
+  module load java/jdk1.8.0_131 BBMap/35.92
+  bbmap.sh --version 2>&1 | grep ' version ' | sed 's/Map/DUK/'
   PHIX=$LAB_HOME/.lib/PhiX_NC_001422.1.fasta
   bbduk.sh -Xmx20g threads=$NSLOTS k=31 hdist=1 ref="$PHIX" \
    in="$R1" in2="$R2" \
    out=$O/trim_reads/"$B"-noPhiX-R1.fsq \
    out2=$O/trim_reads/"$B"-noPhiX-R2.fsq \
    overwrite=t
-  module unload java/jdk1.8.0_92 bbmap
+  module unload java/jdk1.8.0_131 BBMap/35.92
 
   # Adapter clip and quality trim
-  module load java/jdk1.8.0_92 trimmomatic/0.35
+  module load java/jdk1.8.0_131 trimmomatic/0.35
+  echo "trimmomatic lacks a version print option; using $(which trimmomatic)"
   ADAPTERS=$LAB_HOME/.lib/adapters_Nextera_NEB_TruSeq_NuGEN.fas
   trimmomatic PE -phred33 -threads $NSLOTS \
    $O/trim_reads/"$B"-noPhiX-R1.fsq $O/trim_reads/"$B"-noPhiX-R2.fsq \
@@ -180,7 +207,7 @@ if [[ -n "${R1// }" && -n "${R2// }" ]]; then
   cat $O/trim_reads/"$B"_R1.unpaired.fq $O/trim_reads/"$B"_R2.unpaired.fq \
    > $O/trim_reads/"$B".single.fq
   rm -f $O/trim_reads/"$B"_R1.unpaired.fq $O/trim_reads/"$B"_R2.unpaired.fq
-  module unload java/jdk1.8.0_92 trimmomatic/0.35
+  module unload java/jdk1.8.0_131 trimmomatic/0.35
   for suf in _R1.paired.fq _R2.paired.fq ; do
     if [[ ! $(find $O/trim_reads/"$B""$suf" -type f -size +10M) ]]; then
       echo "ERROR: trimmed read unusually small for ${B}${suf}" >&2
@@ -192,7 +219,11 @@ if [[ -n "${R1// }" && -n "${R2// }" ]]; then
    $O/trim_reads/"$B"_R2.paired.fq
 
   # Correct InDel and SNP errors in PacBio assemblies
-  module load bwa/0.7.15 samtools/1.4.1 pilon/1.22 BEDTools/2.26.0
+  module load bwa/0.7.16 samtools/1.4.1 pilon/1.22 BEDTools/2.26.0
+  echo "bwa $(bwa 2>&1 | grep '^Version')"
+  echo "samtools $(samtools 2>&1 | grep '^Version')"
+  bedtools --version | head -n 1
+  pilon --version | head -n 1
   for tig in contigs unitigs; do
     for _ in {1..3}; do
       bwa index $O/asm/"$B".$tig.circ.uncorr.fna
@@ -224,22 +255,26 @@ if [[ -n "${R1// }" && -n "${R2// }" ]]; then
     cat $O/.tmp/"$B".$tig.sum_cov.txt >> $O/qa/Summary.illumina-cov.tab
     rm -f $O/.tmp/"$B".$tig.{cov,sum_cov}.txt
   done
-  module unload bwa/0.7.15 samtools/1.4.1 pilon/1.22 BEDTools/2.26.0
+  module unload bwa/0.7.16 samtools/1.4.1 pilon/1.22 BEDTools/2.26.0
   
-  # Assemble with Unicycler
-  module load ncbi-blast+/2.6.0 SPAdes/3.9.0 bowtie2/2.2.9 \
-   samtools/1.4.1 pilon/1.22 bcftools/1.4.1 racon/0.5.0 ALE/20130717
-  source activate py3unicycler
-  unicycler --threads $NSLOTS --keep 3 --verbosity 2 --linear_seqs 0 \
-   --out $O/asm/unicyc_"$B" -1 $O/trim_reads/"$B"_R1.paired.fq.gz \
-   -2 $O/trim_reads/"$B"_R2.paired.fq.gz -s $O/trim_reads/"$B".single.fq.gz \
-   -l "$pbioFastQ"
-  source deactivate
-  module unload ncbi-blast+/2.6.0 SPAdes/3.9.0 bowtie2/2.2.9 \
-   samtools/1.4.1 pilon/1.22 bcftools/1.4.1 racon/0.5.0 ALE/20130717
+  # # Assemble with Unicycler
+  # module load ncbi-blast+/2.6.0 SPAdes/3.11.1 bowtie2/2.3.3.1 \
+  #  samtools/1.4.1 pilon/1.22 bcftools/1.4.1 racon/0.5.0 ALE/20130717
+  # # source activate py3unicycler
+  # module load Unicycler/0.4.0
+  # unicycler --version 2>&1 | head -n 1
+  # unicycler --threads $NSLOTS --keep 3 --verbosity 2 --linear_seqs 0 \
+  #  --out $O/asm/unicyc_"$B" -1 $O/trim_reads/"$B"_R1.paired.fq.gz \
+  #  -2 $O/trim_reads/"$B"_R2.paired.fq.gz -s $O/trim_reads/"$B".single.fq.gz \
+  #  -l "$pbioFastQ"
+  # # source deactivate
+  # module unload Unicycler/0.4.0
+  # module unload ncbi-blast+/2.6.0 SPAdes/3.11.1 bowtie2/2.3.3.1 \
+  #  samtools/1.4.1 pilon/1.22 bcftools/1.4.1 racon/0.5.0 ALE/20130717
 
   # Save unmapped Illumina reads
   module load samtools/1.4.1
+  echo "samtools $(samtools 2>&1 | grep '^Version')"
   samtools fastq -f 4 -1 $O/.tmp/"$B"_R1.unmapped.fq \
    -2 $O/.tmp/"$B"_R2.unmapped.fq $O/asm/"$B".bam
   rm -f $O/asm/"$B".{bam.bai,bam,changes}
@@ -251,14 +286,15 @@ if [[ -n "${R1// }" && -n "${R2// }" ]]; then
   fi
 
   # Investigate taxonomic identity of unmapped Illumina reads
-  module load kraken/0.10.5
+  module load kraken/1.0.0
+  kraken --version | grep version | head -n 1
   if [[ -z "$KRAKEN_DEFAULT_DB" ]]; then
     export KRAKEN_DEFAULT_DB=/scicomp/reference/kraken/0.10.5/standard
   fi
   kraken --threads $NSLOTS --preload --paired --fastq-input \
    $O/.tmp/"$B"_R1.unmapped.fq $O/.tmp/"$B"_R2.unmapped.fq | \
    kraken-report > "$B"_kraken.tab
-  module unload kraken/0.10.5
+  module unload kraken/1.0.0
   rm -f $O/.tmp/"$B"_R{1,2}.unmapped.fq
   bash $LAB_HOME/.bin/summarize_kraken.sh "$B"_kraken.tab >> \
    $O/qa/Summary.tax-unmapped-illumina.tab
@@ -269,7 +305,9 @@ else
 fi
 
 # Annotate assemblies
-module load perl/5.16.1-MT prokka/1.8 tbl2asn/25
+module load perl/5.16.1-MT prokka/1.12 tbl2asn/25
+prokka --version 2>&1 | head -n 1
+tbl2asn --help | grep '^tbl2asn ' | head -n 1
 for f in "$O"/asm/"$B".*tigs.circ.*.fna; do
   s=$(basename $f .fna)
   prokka --outdir $O/annot/"$s" --prefix "$s" \
@@ -278,4 +316,4 @@ for f in "$O"/asm/"$B".*tigs.circ.*.fna; do
   mv -f $O/annot/$s/$s.gbf $O/annot/$s.gbk
   rm -rf $O/annot/$s
 done
-module unload perl/5.16.1-MT prokka/1.8 tbl2asn/25
+module unload perl/5.16.1-MT prokka/1.12 tbl2asn/25
