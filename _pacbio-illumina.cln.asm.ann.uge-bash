@@ -1,6 +1,27 @@
 #!/usr/bin/env bash
 
 
+verify_file()
+{
+  # 1=filename; 2=file description; 3=size in MB
+  if [ -f  "${1}" ]; then
+    if [ -s  "${1}" ]; then
+      if [[ $(find "${1}" -type f -size +"${3}"M) ]]; then
+        :
+      else
+        echo "ERROR: ${2} file ${1} file present but < ${3} MB" >&2
+        exit 1
+      fi
+    else
+      echo "ERROR: ${2} file ${1} file present but empty" >&2
+      exit 1
+    fi
+  else
+    echo "ERROR: ${2} file ${1} absent" >&2
+    exit 1
+  fi
+}
+
 # Input requirements
 source $HOME/.bashrc
 source /etc/profile.d/modules.sh && module purge
@@ -31,14 +52,11 @@ pbioFilesArr=($(echo "$PBIOFILES" | sed 's/"//g'))
 export B
 parallel --halt now,fail=1 bash5tools.py --verbose \
  --outFilePrefix ${B}.{#} --readType unrolled --outType fastq \
- --minLength 5000 {1} ::: "${pbioFilesArr[@]}"
+ --minLength 3000 {1} ::: "${pbioFilesArr[@]}"
 source deactivate
 module unload gnu_parallel/2017
 cat ${B}*.fastq > ${B}.pacbio.len.fq
-if [[ ! $(find "${B}.pacbio.len.fq" -type f -size +300M) ]]; then
-  echo "ERROR: pacbio reads unexpectedly small for $B" >&2
-  exit 1
-fi
+verify_file "${B}.pacbio.len.fq" 'raw pacbio reads' '300'
 rm ${B}*.fastq
 pigz -9f ${B}.pacbio.len.fq
 mv -f ${B}.pacbio.len.fq.gz "$pbioFastQ"
@@ -64,37 +82,30 @@ if [[ -z "$GSIZE" ]]; then
 fi
 
 # Scrub the reads
-# export PATH=$LAB_HOME/.bin:$PATH # contains DA binaries
-# python3 $LAB_HOME/.bin/dascrubber_wrapper.py -i "$pbioFastQ" \
-#  -g "$GSIZE"M > "$pbioFastQ".scrubbed.fa
-# if [[ ! $(find "$pbioFastQ".scrubbed.fa -type f -size +15M) ]]; then
-#   echo 'ERROR: scrubbed reads unusually small filesize' >&2
-#   exit 1
-# fi
-# pigz -9f "$pbioFastQ".scrubbed.fasta
-# mv -f "$pbioFastQ".scrubbed.fasta.gz "$pbioFastQ"
+module load Python/3.5
+export PATH=$LAB_HOME/.bin:$PATH # contains DA binaries
+python $LAB_HOME/.bin/dascrubber_wrapper.py -i "$pbioFastQ" \
+ -g "$GSIZE"M > "$pbioFastQ".scrubbed.fa
+module unload Python/3.5
+verify_file "${pbioFastQ}.scrubbed.fa" 'scrubbed pacbio reads' '15'
+pigz -9f "$pbioFastQ".scrubbed.fasta
+mv -f "$pbioFastQ".scrubbed.fasta.gz "$pbioFastQ"
 
 # Assemble with Canu
-module load canu/1.6 gnuplot/5.0.3
+module load canu/1.7 gnuplot/5.0.3
 canu -version | head -n 1
-canu genomeSize="${GSIZE}"m correctedErrorRate=0.045 minReadLength=5000 \
+canu genomeSize="${GSIZE}"m correctedErrorRate=0.045 minReadLength=3000 \
  corMinCoverage=3 corOutCoverage=500 saveReadCorrections=true \
  saveMerCounts=true -p $B -d $O/asm/canu_"$B" \
  useGrid=false -pacbio-raw "$pbioFastQ"
  # gridOptions="-V -q all.q -S /bin/bash -e $O/.log -o $O/.log" \
  # gridEngineThreadsOption="-pe smp THREADS" \
  # gridEngineMemoryOption="-l m_mem_free=MEMORY"
-module unload canu/1.6 gnuplot/5.0.3
+module unload canu/1.7 gnuplot/5.0.3
 
 # Verify sufficient bacterial genome size
 for tig in contigs unitigs; do
-  if [[ ! $(find $O/asm/canu_"$B"/"$B".$tig.fasta -type f -size +2M) ]] || \
-   [[ ! -f $O/asm/canu_"$B"/"$B".$tig.fasta ]]; then
-    echo "ERROR: genome assembly unusually small for $B $tig" >&2
-    echo "       check $O/asm/canu_$B/canu-logs for details" >&2
-    exit 1
-  fi
-done
+  verify_file "${O}/asm/canu_${B}/${B}.${tig}.fasta" 'canu assembly' '2'
 mv -f $O/asm/canu_$B/$B.trimmedReads.fasta.gz \
  $O/trim_reads/$B.pacbio.len.corr-trim.fa.gz
 mkdir $O/asm/$B
@@ -126,12 +137,7 @@ for tig in contigs unitigs; do
    --b2r_discard_unmapped $O/asm/"$B"/"$B".$tig.fasta \
    $O/trim_reads/"$B".pacbio.len.corr-trim.fa.gz $O/asm/"$B"/circlator_"$B".$tig
   circ_asm=$O/asm/"$B"/circlator_"$B"."$tig"/06.fixstart.fasta
-  if [[ ! $(find "$circ_asm" -type f -size +2M) ]] || \
-   [[ ! -f "$circ_asm" ]]; then
-    echo "ERROR: genome assembly after circ attempt unusually small for $B" >&2
-    echo "       check $O/asm/canu_$B/canu-logs for details" >&2
-    exit 1
-  fi
+  verify_file "${circ_asm}" 'circularize-attempted genome assembly' '2'
 done
 module unload circlator/1.5.1 canu/1.6
 
@@ -158,7 +164,7 @@ done
 source deactivate
 
 # Calculate PacBio read coverage
-module load bwa/0.7.16 samtools/1.4.1 BEDTools/2.26.0
+module load bwa/0.7.17 samtools/1.8 BEDTools/2.26.0
 echo "bwa $(bwa 2>&1 | grep '^Version')"
 echo "samtools $(samtools 2>&1 | grep '^Version')"
 bedtools --version | head -n 1
@@ -178,7 +184,7 @@ for tig in contigs unitigs; do
   cat $O/.tmp/"$B".$tig.sum_cov.txt >> $O/qa/Summary.pacbio-cov.tab
   rm -f $O/.tmp/"$B".$tig.{cov,sum_cov}.txt
 done
-module unload bwa/0.7.16 samtools/1.4.1 BEDTools/2.26.0
+module unload bwa/0.7.17 samtools/1.8 BEDTools/2.26.0
 
 # Polish if Illumina read set available
 if [[ -n "${R1// }" && -n "${R2// }" ]]; then
@@ -209,17 +215,14 @@ if [[ -n "${R1// }" && -n "${R2// }" ]]; then
   rm -f $O/trim_reads/"$B"_R1.unpaired.fq $O/trim_reads/"$B"_R2.unpaired.fq
   module unload java/jdk1.8.0_131 trimmomatic/0.35
   for suf in _R1.paired.fq _R2.paired.fq ; do
-    if [[ ! $(find $O/trim_reads/"$B""$suf" -type f -size +10M) ]]; then
-      echo "ERROR: trimmed read unusually small for ${B}${suf}" >&2
-      exit 1
-    fi
+    verify_file "${O}/trim_reads/${B}${suf}" 'trimmed illumina reads' '10'
   done
   pigz -9f $O/trim_reads/"$B".single.fq \
    $O/trim_reads/"$B"_R1.paired.fq \
    $O/trim_reads/"$B"_R2.paired.fq
 
   # Correct InDel and SNP errors in PacBio assemblies
-  module load bwa/0.7.16 samtools/1.4.1 pilon/1.22 BEDTools/2.26.0
+  module load bwa/0.7.17 samtools/1.8 pilon/1.22 BEDTools/2.26.0
   echo "bwa $(bwa 2>&1 | grep '^Version')"
   echo "samtools $(samtools 2>&1 | grep '^Version')"
   bedtools --version | head -n 1
@@ -255,30 +258,32 @@ if [[ -n "${R1// }" && -n "${R2// }" ]]; then
     cat $O/.tmp/"$B".$tig.sum_cov.txt >> $O/qa/Summary.illumina-cov.tab
     rm -f $O/.tmp/"$B".$tig.{cov,sum_cov}.txt
   done
-  module unload bwa/0.7.16 samtools/1.4.1 pilon/1.22 BEDTools/2.26.0
+  module unload bwa/0.7.17 samtools/1.8 pilon/1.22 BEDTools/2.26.0
   
-  # # Assemble with Unicycler
-  # module load ncbi-blast+/2.6.0 SPAdes/3.11.1 bowtie2/2.3.3.1 \
-  #  samtools/1.4.1 pilon/1.22 bcftools/1.4.1 racon/0.5.0 ALE/20130717
-  # # source activate py3unicycler
-  # module load Unicycler/0.4.0
-  # unicycler --version 2>&1 | head -n 1
-  # unicycler --threads $NSLOTS --keep 3 --verbosity 2 --linear_seqs 0 \
-  #  --out $O/asm/unicyc_"$B" -1 $O/trim_reads/"$B"_R1.paired.fq.gz \
-  #  -2 $O/trim_reads/"$B"_R2.paired.fq.gz -s $O/trim_reads/"$B".single.fq.gz \
-  #  -l "$pbioFastQ"
-  # # source deactivate
-  # module unload Unicycler/0.4.0
-  # module unload ncbi-blast+/2.6.0 SPAdes/3.11.1 bowtie2/2.3.3.1 \
-  #  samtools/1.4.1 pilon/1.22 bcftools/1.4.1 racon/0.5.0 ALE/20130717
+  # Assemble with Unicycler
+  module load ncbi-blast+/2.6.0 SPAdes/3.12.0 bowtie2/2.3.3.1 \
+   samtools/1.8 java/jdk1.8.0_131 pilon/1.22 bcftools/1.7 \
+   ALE/20130717 gcc/5.4
+  source activate py3unicycler
+  unicycler --version 2>&1 | head -n 1
+  unicycler --threads $NSLOTS --keep 0 --verbosity 2 --linear_seqs 0 \
+   --out $O/asm/unicyc_"$B" -1 $O/trim_reads/"$B"_R1.paired.fq.gz \
+   -2 $O/trim_reads/"$B"_R2.paired.fq.gz -s $O/trim_reads/"$B".single.fq.gz \
+   -l "$pbioFastQ" --min_polish_size 1000
+  source deactivate
+  module unload ncbi-blast+/2.6.0 SPAdes/3.12.0 bowtie2/2.3.3.1 \
+   samtools/1.8 java/jdk1.8.0_131 pilon/1.22 bcftools/1.7 \
+   ALE/20130717 gcc/5.4
+  mv -f $O/asm/unicyc_"$B"/assembly.fasta $O/asm/unicyc_"$B".fna
+  pigz -9f $O/asm/unicyc_"$B"/{assembly.gfa,unicycler.log}
 
   # Save unmapped Illumina reads
-  module load samtools/1.4.1
+  module load samtools/1.8
   echo "samtools $(samtools 2>&1 | grep '^Version')"
   samtools fastq -f 4 -1 $O/.tmp/"$B"_R1.unmapped.fq \
    -2 $O/.tmp/"$B"_R2.unmapped.fq $O/asm/"$B".bam
   rm -f $O/asm/"$B".{bam.bai,bam,changes}
-  module unload samtools/1.4.1
+  module unload samtools/1.8
   if [[ ! $(find $O/.tmp/"$B"_R1.unmapped.fq -type f -size +5M) ]] || \
    [[ ! $(find $O/.tmp/"$B"_R2.unmapped.fq -type f -size +5M) ]]; then
     echo "INFO: unmapped Illumina reads too small for downstream analyses"
