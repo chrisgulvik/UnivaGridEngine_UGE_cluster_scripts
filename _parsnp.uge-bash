@@ -10,18 +10,23 @@ fi
 # Input requirements
 source $HOME/.bashrc
 source /etc/profile.d/modules.sh
-if [[ -z "$LAB_HOME" ]]; then
+if [ -z $LAB_HOME ]; then
   echo 'ERROR: $LAB_HOME not set' >&2
   exit 1
 fi
-if [[ -z "$ASM_DIR" || -z "$GBK_DIR" || -z "$O" ]]; then
-  echo 'ERROR: ASM_DIR GBK_DIR O (3 variables required)' >&2
+if [ -z $O ]; then
+  echo 'ERROR: $O variable required)' >&2
+  exit 1
+fi
+if [[ -z $ASM_DIR && -z $ALL_GENOMES_IN_DIR ]]; then
+  echo 'ERROR: $ASM_DIR and/or $ALL_GENOMES_IN_DIR variable required' >&2
   exit 1
 fi
 
 # Test if >2 sequence files
 shopt -s nullglob
-ASSEMS=( $ASM_DIR/*.fna )
+[ -n $ASM_DIR ] && ASSEMS+=( $ASM_DIR/*.fna )
+[ -n $ALL_GENOMES_IN_DIR ] && ASSEMS+=( $ALL_GENOMES_IN_DIR/*.{fa,fas,fsa,fna,fasta} )
 shopt -u nullglob
 if [ ${#ASSEMS[@]} -lt 3 ]; then
   echo 'ERROR: at least 3 genomes are required for SNP analysis' >&2
@@ -29,22 +34,28 @@ if [ ${#ASSEMS[@]} -lt 3 ]; then
 fi
 echo "${#ASSEMS[@]} genomes will be processed..."
 
-# Setup dir structure
-mkdir -p $O/parsnp
+# Symlink assembly files to .tmp and discard file extensions
+mkdir -p $O/parsnp/.tmp
+for FILE in ${ASSEMS[@]}; do
+  BASE=$(basename $FILE)
+  NO_EXT="${BASE%.*}"
+  ln -sf $FILE $O/parsnp/.tmp/$NO_EXT
+done
 
 # Pick reference genome based on largest filesize
-LARGEST_SIZE=$(ls -Sr $ASM_DIR/*.fna | tail -n 1)
+LARGEST_SIZE=$(ls -SLr $O/parsnp/.tmp/* | tail -n 1)
 REF=$(readlink -f $LARGEST_SIZE)
 
 # Compute distances
 module load harvest/1.1.3
-parsnp -v -x -c -o $O/parsnp -r $REF -d $ASM_DIR -p $NSLOTS
+parsnp -v -x -c -o $O/parsnp -r $REF -d $O/parsnp/.tmp -p $NSLOTS
 if [ ! -f "$O/parsnp/parsnp.ggr" ] || \
 [[ ! $(find "$O/parsnp/parsnp.ggr" -type f -size +1k 2> /dev/null) ]]; then
   echo """ERROR: Parsnp failed.
   Check $O/parsnp/parsnpAligner.log or $O/.log/Parsnp.e*""" >&2
   exit 1
 fi
+rm -rf $O/parsnp/.tmp
 harvesttools -i $O/parsnp/parsnp.ggr -S $O/parsnp/SNPs.fa
 module unload harvest/1.1.3
 module load perl/5.16.1-MT
