@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+
+
+function usage() { 
+  echo "
+Usage: ${0##*/} InputDirectory [OutputDirectory] [-h|--help]
+
+Required:
+  <InputDirectory>   All assembly files ending in fa,fas,
+                     fsa,fna,fasta will be analyzed.
+
+Optional:
+  -h | --help        Show this help message and exit.
+
+  <OutputDirectory>  Location for the output files, which
+                     includes job logfiles. Output files
+                     will be overwritten if already present.
+                     Default: current working directory.
+
+  "
+  }
+
+# Requirements
+command -v qsub >/dev/null 2>&1 || { echo 'ERROR: qsub not found' >&2; exit 1; }
+[[ $1 == "--help" || $1 == "-h" ]] && { usage; exit 0; }
+if [[ $# -lt 1  || $# -gt 2 ]]; then
+  echo "ERROR: improper number ("$#") of arguments provided" >&2
+  usage
+  exit 1
+fi
+source $HOME/.bashrc
+if [[ -z "$LAB_HOME" ]]; then
+  echo 'ERROR: $LAB_HOME not set' >&2
+  exit 1
+fi
+
+# I/O handling
+IN=$(readlink -f "$1")
+if [[ -z "$2" ]]; then
+  OUT="${PWD}"
+else
+  OUT=$(readlink -f "$2")
+fi
+[ ! -d "$OUT"/.log ] && mkdir -pv "$OUT"/.log > /dev/null
+
+# Log system and user info for debugging
+echo "[START]           $(date)" > "$OUT"/.log/log.txt
+echo "[SYS]             $(uname -nro)" >> "$OUT"/.log/log.txt
+echo "[USER]            $USER" >> "$OUT"/.log/log.txt
+echo "[CWD]             $PWD" >> "$OUT"/.log/log.txt
+source /etc/profile.d/modules.sh && module purge
+echo "[MODULES LOADED]  $(module list 2>&1 | \
+  sed 's/Currently Loaded Modulefiles://1')" >> "$OUT"/.log/log.txt
+echo -e "[PATH]            $PATH\n" >> "$OUT"/.log/log.txt
+echo "[I/O]" >> "$OUT"/.log/log.txt
+echo "Input directory:  $IN" | tee -a "$OUT"/.log/log.txt
+echo -e "Output directory: $OUT\n" | tee -a "$OUT"/.log/log.txt
+
+# Test if >2 sequence files
+shopt -s nullglob
+ASM=( $IN/*.{fa,fas,fsa,fna,fasta} )
+shopt -u nullglob
+echo "Found ${#ASM[@]} genomes..."
+echo -e "[ASSEMBLIES]\n$(echo ${ASM[@]} | tr ' ' '\n')\n" | \
+  tee -a "$OUT"/.log/log.txt
+if [ ${#ASM[@]} -lt 3 ]; then
+  echo 'ERROR: at least 3 genomes are required for batch analysis' >&2
+  exit 1
+fi
+
+# Call SNPs from assembled genomes
+qsub -q all.q -pe smp 1-128 -N Parsnp -e $OUT/.log -o $OUT/.log\
+ -hold_jid $csv_jobs -v ALL_GENOMES_IN_DIR=$IN,O=$OUT\
+ $LAB_HOME/.job/_parsnp.uge-bash
+echo 'The job was submitted, so you can logout and check back later'
