@@ -6,6 +6,11 @@
 [[ -z "$S2" ]] && { echo 'ERROR: $S2 not set' >&2; exit 1; }
 [[ -z "$O" ]] && { echo 'ERROR: $O not set' >&2; exit 1; }
 
+# Optional non-default parameters for AAI comparison
+XOPTS=''
+[[ ! -z "${ALN_FRAC}" ]] && { XOPTS="--identity $ALN_FRAC "; }
+[[ ! -z "${PERC_ID}" ]] && { XOPTS+="--identity $PERC_ID "; }
+
 for f in $S1 $S2; do
   if [ ! -f "$f" ]; then
     echo "ERROR: $f nonexistent" >&2
@@ -19,7 +24,6 @@ done
 
 B1=$(basename $S1 .faa)
 B2=$(basename $S2 .faa)
-
 
 if [ -s "$O/AAI--$B1,$B2/aai.$B1,$B2.stats.tab" ]; then
   echo "INFO: found precomputed $O/AAI--$B1,$B2/aai.$B1,$B2.stats.tab" >&2
@@ -42,6 +46,6 @@ export PATH="$LAB_HOME/.anaconda2/bin:$PATH"
 sleep 0.5
 source activate bpy2
 command -v blastp > /dev/null 2>&1 || { echo 'ERROR: blastp not found' >&2; exit 1; }
-AAI.py -1 $S1 -2 $S2 -c $NSLOTS -o "$O/AAI--$B1,$B2"
+AAI.py -1 $S1 -2 $S2 -c $NSLOTS -o "$O/AAI--$B1,$B2" "$XOPTS"
 source deactivate
 module unload ncbi-blast+/2.6.0
