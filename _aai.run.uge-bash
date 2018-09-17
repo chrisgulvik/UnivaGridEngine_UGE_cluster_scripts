@@ -8,7 +8,7 @@
 
 # Optional non-default parameters for AAI comparison
 XOPTS=''
-[[ ! -z "${ALN_FRAC}" ]] && { XOPTS="--identity $ALN_FRAC "; }
+[[ ! -z "${ALN_FRAC}" ]] && { XOPTS="--fraction $ALN_FRAC "; }
 [[ ! -z "${PERC_ID}" ]] && { XOPTS+="--identity $PERC_ID "; }
 
 for f in $S1 $S2; do
