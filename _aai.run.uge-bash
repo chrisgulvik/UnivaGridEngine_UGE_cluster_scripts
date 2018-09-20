@@ -46,6 +46,6 @@ export PATH="$LAB_HOME/.anaconda2/bin:$PATH"
 sleep 0.5
 source activate bpy2
 command -v blastp > /dev/null 2>&1 || { echo 'ERROR: blastp not found' >&2; exit 1; }
-AAI.py -1 $S1 -2 $S2 -c $NSLOTS -o "$O/AAI--$B1,$B2" "$XOPTS"
+AAI.py -1 $S1 -2 $S2 -c $NSLOTS -o "$O/AAI--$B1,$B2" $XOPTS
 source deactivate
 module unload ncbi-blast+/2.6.0
