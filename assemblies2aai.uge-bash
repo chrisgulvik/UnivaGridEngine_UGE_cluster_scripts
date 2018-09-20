@@ -83,21 +83,25 @@ echo -n '' > "$OUT"/.log/job_ids.txt
 FAA=()
 for A in "${ASM[@]}"; do
   B=$(basename ${A%\.*} | sed 's/[_-\.\(\)]//g')
-  if [[ $(find "${OUT}/annot/${B}/${B}.faa" -type f -size +3M) ]]; then
+  if [[ $(find "${OUT}/annot/${B}/${B}.faa" -type f -size +700k 2>/dev/null) ]]; then
+    echo "  using previously generated FastA proteome file:
+    ${OUT}/annot/${B}/${B}.faa" >> "$OUT"/.log/log.txt
     FAA+=("${OUT}/annot/${B}/${B}.faa")
-  elif [[ $(find "${OUT}/${B}/${B}.faa" -type f -size +3M) ]]; then
+  elif [[ $(find "${OUT}/${B}/${B}.faa" -type f -size +700k 2>/dev/null) ]]; then
+    echo "  using previously generated FastA proteome file:
+    ${OUT}/${B}/${B}.faa" >> "$OUT"/.log/log.txt
     FAA+=("${OUT}/${B}/${B}.faa")
-  elif [[ $(find "${OUT}/${B}.faa" -type f -size +3M) ]]; then
+  elif [[ $(find "${OUT}/${B}.faa" -type f -size +700k 2>/dev/null) ]]; then
+    echo "  using previously generated FastA proteome file:
+    ${OUT}/${B}.faa" >> "$OUT"/.log/log.txt
     FAA+=("${OUT}/${B}.faa")
   else
-    F=$(printf '%q\n' $IN/$A)
-    JID=$(qsub -q all.q -pe smp 1-128 -N ann.$B -o $OUT/.log -e $OUT/.log <<- EOF
+    JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N ann.$B -o $OUT/.log -e $OUT/.log <<- EOF
 		source /etc/profile.d/modules.sh
 		module load perl/5.16.1-MT prokka/1.8
 		prokka --outdir $OUT/annot/$B --prefix $B --addgenes --locustag $B \
-			--mincontiglen 250 --evalue 1e-06 --cpus \$NSLOTS --force $F
-		module unload perl/5.16.1-MT prokka/1.8
-		rm -f "${OUT}/${B}/${B}.{err,ffn,fsa,log,sqn,tbl,txt}"
+			--mincontiglen 250 --evalue 1e-06 --cpus \$NSLOTS --force $IN/$A
+		rm -f "${OUT}/annot/${B}/${B}".{err,ffn,fsa,log,sqn,tbl,txt}
 		EOF
     )
     [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
@@ -108,11 +112,11 @@ done
 
 FAA_str=$(printf ",%s" "${FAA[@]}" | sed 's/^,//1')
 export FAA_str
-readarray -d ' ' -t COMBO < <(python - <<-EOF
+readarray -t COMBO < <(python - <<-EOF
 	import itertools, os
 	a = os.getenv('FAA_str').split(',')
 	l = list(itertools.combinations(a, 2))
-	print(' '.join('{},{}'.format(j, k) for j, k in l))
+	print('\n'.join('{},{}'.format(j, k) for j, k in l))
 EOF
 )
 
@@ -124,8 +128,8 @@ for C in "${COMBO[@]}"; do
   C2=${C##*,}
   D1=$(basename ${C1%.*})
   D2=$(basename ${C2%.*})
-  JID=$(qsub -q all.q -pe smp 1-128 -N aai.$D1$D2 -o $OUT/.log -e $OUT/.log \
-    -hold_jid $JOBS -v S1=$C1,S2=$C2,O=$OUT \
+  JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N aai.$D1$D2 -o $OUT/.log \
+    -e $OUT/.log -hold_jid ${JOBS:-0000001} -v S1=$C1,S2=$C2,O=$OUT \
     $LAB_HOME/.job/_aai.run.uge-bash)
   [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
   echo "$JID" >> "$OUT"/.log/job_ids.txt
@@ -136,8 +140,8 @@ JOBS=$(cat "$OUT"/.log/job_ids.txt | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
   tr -d '\n' | sed -e 's/,$//')
 if [ ${#JOBS} -lt $((`getconf ARG_MAX`-300)) ]; then
   echo "Submitting AAI summary job..."
-  JID=$(qsub -q all.q -N aai.sum -o $OUT/.log -e $OUT/.log -hold_jid $JOBS \
-    -v P=$OUT $LAB_HOME/.job/_aai.summarize.uge-bash)
+  JID=$(qsub -q all.q -N aai.sum -o $OUT/.log -e $OUT/.log \
+    -hold_jid ${JOBS:-0000001} -v P=$OUT $LAB_HOME/.job/_aai.summarize.uge-bash)
   [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
   echo 'All jobs submitted, so you can logout and check back later!'
 else
