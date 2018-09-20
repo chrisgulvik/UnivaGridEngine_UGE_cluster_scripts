@@ -131,7 +131,8 @@ for C in "${COMBO[@]}"; do
   D1=$(basename ${C1%.*})
   D2=$(basename ${C2%.*})
   JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N pocp.$D1$D2 -o $OUT/.log \
-    -e $OUT/.log -hold_jid $JOBS -v S1=$C1,S2=$C2,O=$OUT,ALN_FRAC=50,PERC_ID=40 \
+    -e $OUT/.log -hold_jid ${JOBS:-0000001} \
+    -v S1=$C1,S2=$C2,O=$OUT,ALN_FRAC=50,PERC_ID=40 \
     $LAB_HOME/.job/_aai.run.uge-bash)
   [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
   echo "$JID" >> "$OUT"/.log/job_ids.txt
@@ -143,7 +144,7 @@ JOBS=$(cat "$OUT"/.log/job_ids.txt | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
 if [ ${#JOBS} -lt $((`getconf ARG_MAX`-300)) ]; then
   echo "Submitting POCP summary job..."
   JID=$(qsub -q all.q -q short.q -N pocp.sum -o $OUT/.log -e $OUT/.log \
-    -hold_jid $JOBS -v P=$OUT $LAB_HOME/.job/_aai.summarize.uge-bash)
+    -hold_jid ${JOBS:-0000001} -v P=$OUT $LAB_HOME/.job/_aai.summarize.uge-bash)
   [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
   echo 'All jobs submitted, so you can logout and check back later!'
 else
