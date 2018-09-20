@@ -15,7 +15,7 @@ fi
 
 # Verify each file has data
 for f in "${STATS[@]}"; do
-  lines=$(grep -o '%'$'\t''[0-9]' $f | wc -l)
+  lines=$(grep -o '[0-9]%' $f | wc -l)
   if [ $lines -ne 6 ]; then
     echo "ERROR: $f lacks data to extract" >&2
     exit 1
@@ -51,14 +51,13 @@ sed -i "1i ${A}${B}${B}" "$P"/AAI.Summary.tab
 
 # Calculate number of proteins in each
 echo -n '' > "$P"/Num_Proteins_Per_Proteome.tab
-for i in "$P"/*/*.faa; do
+shopt -s globstar
+for i in "$P"/**/*.faa; do
   b=$(basename $i .faa)
   nr=$(grep '^>' $i | wc -l)
   echo -e "$b\t$nr" >> "$P"/Num_Proteins_Per_Proteome.tab
 done
+shopt -u globstar
 sed -i '1i Proteome\tProteins_Predicted_from_Genome[#]' \
   "$P"/Num_Proteins_Per_Proteome.tab
 sed -i 's/\.faa//g' "$P"/Num_Proteins_Per_Proteome.tab
-
-# Cleanup
-rm -f "$P"/*/*.{err,ffn,fna,fsa,sqn,tbl,txt}
