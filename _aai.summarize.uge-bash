@@ -37,13 +37,13 @@ for f in "${STATS[@]}"; do
   # unidirectional values
   P1=$(sed -n '3p' $f | cut -f 2 | cut -d \/ -f 1)
   M1=$(sed -n '3p' $f | cut -f 3 | sed 's/%//1')
-  S1=$(sed -n '3p' $f | cut -f 4 | sed 's/%//1')
+  D1=$(sed -n '3p' $f | cut -f 4 | sed 's/%//1')
 
   P2=$(sed -n '4p' $f | cut -f 2 | cut -d \/ -f 1)
   M2=$(sed -n '4p' $f | cut -f 3 | sed 's/%//1')
-  S2=$(sed -n '4p' $f | cut -f 4 | sed 's/%//1')
+  D2=$(sed -n '4p' $f | cut -f 4 | sed 's/%//1')
 
-  echo -e "$S1\t$S2\t$PROT\t$MEAN\t$STDEV\t$P1\t$M1\t$S1\t$P2\t$M2\t$S2" >> "$P"/AAI.Summary.tab
+  echo -e "$S1\t$S2\t$PROT\t$MEAN\t$STDEV\t$P1\t$M1\t$D1\t$P2\t$M2\t$D2" >> "$P"/AAI.Summary.tab
 done
 A='Sample\tSample\tProteins_Used_for_Bidirectional_Calc[#]\tBidirectional_AAI[%]\tBidirectional_StDev[%]'
 B='\tProteins_Used_for_Unidirectional_Calc[#]\tUnidirectional_AAI[%]\tUnidirectional_StDev[%]'
