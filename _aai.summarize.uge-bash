@@ -25,7 +25,7 @@ done
 # Summarize AAI values
 echo -n '' > "$P"/AAI.Summary.tab
 for f in "${STATS[@]}"; do
-  PAIR=$(basename $f .stats.tab | sed 's/ani\.//1')
+  PAIR=$(basename $f .stats.tab | sed 's/aai\.//1')
   S1=${PAIR##*,}
   S2=${PAIR%%,*}
 
