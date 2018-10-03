@@ -149,7 +149,7 @@ JOBS=$(cat "$OUT"/.log/job_ids.txt | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
   tr -d '\n' | sed -e 's/,$//')
 if [ ${#JOBS} -lt $((`getconf ARG_MAX`-300)) ]; then
   echo "Submitting AAI summary job..."
-  JID=$(qsub -q all.q -N aai.sum -o $OUT/.log -e $OUT/.log \
+  JID=$(qsub -q all.q -q short.q -N aai.sum -o $OUT/.log -e $OUT/.log \
     -hold_jid ${JOBS:-0000001} -v P=$OUT $LAB_HOME/.job/_aai.summarize.uge-bash)
   [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
   echo 'All jobs submitted, so you can logout and check back later!'
