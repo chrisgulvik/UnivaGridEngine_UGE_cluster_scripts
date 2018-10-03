@@ -6,9 +6,16 @@ function usage() {
 Usage: ${0##*/} InputDirectory [OutputDirectory] [-h|--help]
 
 Required:
-  <InputDirectory>   All assembly files ending in fa,fas,
-                     fsa,fna,fasta will be analyzed.
-                     Commas are forbidden in filenames.
+  <InputDirectory>   All assembly files ending in fa,fas,fsa,fna,fasta
+                     will be analyzed. Commas are forbidden in filenames.
+
+                     If a genome FastA file is found that corresponds
+                     to the genome sample name found in <InDir> in either
+                       <InDir>/annot/<sample>/<sample>.fna,
+                        -OR- <InDir>/<sample>/<sample>.fna
+                        -OR- <InDir>/<sample>.fna
+                     ANI will use it, otherwise Prokka will generate
+                     an annotated genome first.
 
 Optional:
   -h | --help        Show this help message and exit.
@@ -58,6 +65,15 @@ echo "Input directory:  $IN" | tee -a "$OUT"/.log/log.txt
 echo -e "Output directory: $OUT\n" | tee -a "$OUT"/.log/log.txt
 
 cd $IN
+if [[ $(find . -maxdepth 1 -type f -regextype posix-extended \
+  -regex ".*[[:space:]].*\.(fa|fas|fsa|fna|fasta)" | wc -l) -gt 0 ]]; then
+  echo 'ERROR: whitespace within input filenames are not allowed' >&2
+  echo 'Offending files are:' >&2
+  find . -maxdepth 1 -type f -regextype posix-extended \
+   -regex ".*[[:space:]].*\.(fa|fas|fsa|fna|fasta)" \
+   -printf '%p\t%s bytes\n' >&2
+  exit 1
+fi
 shopt -s nullglob
 ASM=( *.{fa,fas,fsa,fna,fasta} )
 shopt -u nullglob
@@ -73,29 +89,39 @@ fi
 cd $OUT
 echo "Annotating ${#ASM[@]} genomes..."
 echo -n '' > "$OUT"/.log/job_ids.txt
+FNA=()
 for A in "${ASM[@]}"; do
   B=$(basename ${A%\.*} | sed 's/[_-\.\(\)]//g')
-  F=$(printf '%q\n' $IN/$A)
-  JID=$(qsub -q all.q -pe smp 1-128 -N ann.$B -o $OUT/.log -e $OUT/.log <<- EOF
-	source /etc/profile.d/modules.sh
-	module load perl/5.16.1-MT prokka/1.8
-	prokka --outdir $OUT/$B --prefix $B --addgenes --locustag $B \
-		--mincontiglen 1000 --evalue 1e-06 --cpus \$NSLOTS --force $F
-	module unload perl/5.16.1-MT prokka/1.8
-	EOF
-	)
-  [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
-  echo "$JID" >> "$OUT"/.log/job_ids.txt
+  if [[ $(find "${OUT}/annot/${B}/${B}.fna" -type f -size +2M 2>/dev/null) ]]; then
+    FNA+=("${OUT}/annot/${B}/${B}.fna")
+  elif [[ $(find "${OUT}/${B}/${B}.fna" -type f -size +2M 2>/dev/null) ]]; then
+    FNA+=("${OUT}/${B}/${B}.fna")
+  elif [[ $(find "${OUT}/${B}.fna" -type f -size +2M 2>/dev/null) ]]; then
+    FNA+=("${OUT}/${B}.fna")
+  else
+    JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N ann.$B -o $OUT/.log -e $OUT/.log <<- EOF
+		source /etc/profile.d/modules.sh
+		module load perl/5.16.1-MT prokka/1.8
+		prokka --outdir $OUT/annot/$B --prefix $B --addgenes --locustag $B \
+			--mincontiglen 250 --evalue 1e-06 --cpus \$NSLOTS --force $F
+		rm -f "${OUT}/${B}/${B}.{err,ffn,fsa,log,sqn,tbl,txt}"
+		EOF
+    )
+    [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
+    echo "$JID" >> "$OUT"/.log/job_ids.txt
+    FNA+=("${OUT}/annot/${B}/${B}.fna")
+  fi
 done
 
-COMBO=()
-for A in "${!ASM[@]}"; do
-  for B in "${!ASM[@]}"; do
-    if [[ $A != $B && ! ${COMBO[@]} =~ "${ASM[$B]},${ASM[$A]}" ]]; then
-      COMBO+=(${ASM[$A]},${ASM[$B]})
-    fi
-  done
-done
+FNA_str=$(printf ",%s" "${FNA[@]}" | sed 's/^,//1')
+export FNA_str
+readarray -t COMBO < <(python - <<-EOF
+	import itertools, os
+	a = os.getenv('FNA_str').split(',')
+	l = list(itertools.combinations(a, 2))
+	print('\n'.join('{},{}'.format(j, k) for j, k in l))
+EOF
+)
 
 echo "Submitting ${#COMBO[@]} bidirectional ANI query jobs..."
 JOBS=$(cat "$OUT"/.log/job_ids.txt | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
@@ -103,20 +129,26 @@ JOBS=$(cat "$OUT"/.log/job_ids.txt | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
 for C in "${COMBO[@]}"; do
   C1=${C%%,*}
   C2=${C##*,}
-  D1=$(basename ${C1%.*} | sed 's/[_-\.\(\)]//g')
-  D2=$(basename ${C2%.*} | sed 's/[_-\.\(\)]//g')
-  JID=$(qsub -q all.q -pe smp 1-128 -N ani.$D1$D2 -o $OUT/.log -e $OUT/.log \
-    -hold_jid $JOBS -v S1=$OUT/$D1/$D1.fna,S2=$OUT/$D2/$D2.fna,O=$OUT \
-    $LAB_HOME/.job/_ani.run.uge-bash)
+  D1=$(basename ${C1%.*})
+  D2=$(basename ${C2%.*})
+  JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N ani.$D1$D2 \
+    -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
+    -v S1=$C1,S2=$C2,O=$OUT $LAB_HOME/.job/_ani.run.uge-bash)
   [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
   echo "$JID" >> "$OUT"/.log/job_ids.txt
 done
 sleep 0.5
 
-echo "Submitting ANI summary job..."
 JOBS=$(cat "$OUT"/.log/job_ids.txt | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
   tr -d '\n' | sed -e 's/,$//')
-JID=$(qsub -q all.q -N ani.sum -o $OUT/.log -e $OUT/.log -hold_jid $JOBS \
-  -v P=$OUT $LAB_HOME/.job/_ani.summarize.uge-bash)
-[[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
-echo 'All jobs submitted, so you can logout and check back later!'
+if [ ${#JOBS} -lt $((`getconf ARG_MAX`-300)) ]; then
+  echo "Submitting ANI summary job..."
+  JID=$(qsub -q all.q -q short.q -N ani.sum -o $OUT/.log -e $OUT/.log \
+    -hold_jid ${JOBS:-0000001} -v P=$OUT \
+    $LAB_HOME/.job/_ani.summarize.uge-bash)
+  [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
+  echo 'All jobs submitted, so you can logout and check back later!'
+else
+  echo "ANI summary job skipped due to high sample number"
+  echo "\$JOBS is ${#JOBS} char long which exceeds ARG_MAX"
+fi
