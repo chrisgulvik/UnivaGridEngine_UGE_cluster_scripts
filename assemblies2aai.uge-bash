@@ -65,6 +65,15 @@ echo "Input directory:  $IN" | tee -a "$OUT"/.log/log.txt
 echo -e "Output directory: $OUT\n" | tee -a "$OUT"/.log/log.txt
 
 cd $IN
+if [[ $(find . -maxdepth 1 -type f -regextype posix-extended \
+  -regex ".*[[:space:]].*\.(fa|fas|fsa|fna|fasta)" | wc -l) -gt 0 ]]; then
+  echo 'ERROR: whitespace within input filenames are not allowed' >&2
+  echo 'Offending files are:' >&2
+  find . -maxdepth 1 -type f -regextype posix-extended \
+   -regex ".*[[:space:]].*\.(fa|fas|fsa|fna|fasta)" \
+   -printf '%p\t%s bytes\n' >&2
+  exit 1
+fi
 shopt -s nullglob
 ASM=( *.{fa,fas,fsa,fna,fasta} )
 shopt -u nullglob
