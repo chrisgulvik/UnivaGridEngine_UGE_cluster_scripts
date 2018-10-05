@@ -170,10 +170,11 @@ for s in "${SAMPLES[@]}"; do
 done
 
 # Summarize reads and assemblies
-csv_jobs=$(cat $OUTDIR/.log/job_ids.txt | cut -f 3 -d ' ' | \
+JOBS=$(cat $OUTDIR/.log/job_ids.txt | cut -f 3 -d ' ' | \
  sed -e 's/$/,/' | tr -d '\n' | sed -e 's/,$//')
 a=$OUTDIR/asm
 r=$OUTDIR/trim_reads
-qsub -q all.q -pe smp 1-128 -N QA.reads.asm -e $OUTDIR/.log -o $OUTDIR/.log \
- -hold_jid $csv_jobs -v ASM_DIR=$a,TRIM_DIR=$r,O=$OUTDIR \
+qsub -q all.q -q short.q -pe smp 1-128 -N QA.reads.asm \
+ -e $OUTDIR/.log -o $OUTDIR/.log \
+ -hold_jid ${JOBS:-0000001} -v ASM_DIR=$a,TRIM_DIR=$r,O=$OUTDIR \
  $LAB_HOME/.job/_summarize.FastQ.FastA.uge-bash > /dev/null
