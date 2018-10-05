@@ -56,7 +56,17 @@ echo "[I/O]" >> "$OUT"/.log/log.txt
 echo "Input directory:  $IN" | tee -a "$OUT"/.log/log.txt
 echo -e "Output directory: $OUT\n" | tee -a "$OUT"/.log/log.txt
 
-# Test if >2 sequence files
+# Find all input assembly files
+cd $IN
+if [[ $(find . -maxdepth 1 -type f -regextype posix-extended \
+  -regex ".*[[:space:]].*\.(fa|fas|fsa|fna|fasta)" | wc -l) -gt 0 ]]; then
+  echo 'ERROR: whitespace within input filenames are not allowed' >&2
+  echo 'Offending files are:' >&2
+  find . -maxdepth 1 -type f -regextype posix-extended \
+   -regex ".*[[:space:]].*\.(fa|fas|fsa|fna|fasta)" \
+   -printf '%p\t%s bytes\n' >&2
+  exit 1
+fi
 shopt -s nullglob
 ASM=( $IN/*.{fa,fas,fsa,fna,fasta} )
 shopt -u nullglob
@@ -69,7 +79,6 @@ if [ ${#ASM[@]} -lt 3 ]; then
 fi
 
 # Call SNPs from assembled genomes
-qsub -q all.q -pe smp 1-128 -N Parsnp -e $OUT/.log -o $OUT/.log\
- -hold_jid $csv_jobs -v ALL_GENOMES_IN_DIR=$IN,O=$OUT\
- $LAB_HOME/.job/_parsnp.uge-bash
+qsub -q all.q -q short.q -pe smp 1-128 -N Parsnp -e $OUT/.log -o $OUT/.log\
+ -v ALL_GENOMES_IN_DIR=$IN,O=$OUT $LAB_HOME/.job/_parsnp.uge-bash
 echo 'The job was submitted, so you can logout and check back later'
