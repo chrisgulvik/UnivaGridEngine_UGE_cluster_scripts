@@ -42,22 +42,13 @@ if [[ "$1" == "" || "$1" == "--help" || "$1" == "-h" ]]; then
     asm/
         <sampleA>/
             assembly_graph_with_scaffolds.gfa
-            {params.txt,spades.log}.gz
+            {contigs.fasta,params.txt,spades.log}.gz
         <sampleB>/
             assembly_graph_with_scaffolds.gfa
-            {params.txt,spades.log}.gz
+            {contigs.fasta,params.txt,spades.log}.gz
         <sampleC>/
             assembly_graph_with_scaffolds.gfa
-            {params.txt,spades.log}.gz
-        nucdiff_<sampleA>/
-            Skesa_Ref-vs-SPAdes.{stats.tsv,{query,ref}_snps.vcf.gz}
-            Skesa_Ref-vs-Unicyc.{stats.tsv,{query,ref}_snps.vcf.gz}
-        nucdiff_<sampleB>/
-            Skesa_Ref-vs-SPAdes.{stats.tsv,{query,ref}_snps.vcf.gz}
-            Skesa_Ref-vs-Unicyc.{stats.tsv,{query,ref}_snps.vcf.gz}
-        nucdiff_<sampleC>/
-            Skesa_Ref-vs-SPAdes.{stats.tsv,{query,ref}_snps.vcf.gz}
-            Skesa_Ref-vs-Unicyc.{stats.tsv,{query,ref}_snps.vcf.gz}
+            {contigs.fasta,params.txt,spades.log}.gz
         <sampleA>.fna
         <sampleB>.fna
         <sampleC>.fna
@@ -66,7 +57,7 @@ if [[ "$1" == "" || "$1" == "--help" || "$1" == "-h" ]]; then
         {skesa,unicyc}_<sampleC>.fna.gz
     parsnp/
         parsnp.ggr
-        parsnp.tre
+        parsnp.tree
         SNP-distance.matrix.tsv
         SNP-distance.pairs.tsv
     qa/
@@ -127,31 +118,40 @@ for (( i=0; i<${#READS[@]}; i+=2 )); do
     exit 1
   fi
   echo "  $b1"
-  job_id=$(qsub -q all.q -pe smp 1-128 -N TrimAsmAnnot.$b1 -e $OUTDIR/.log\
+  # Identify most available queue
+  QUEUE=$(qstat -f | grep -e '^short.q@node' -e '^all.q@node' |\
+   grep 'lx-amd64      $' | sed 's/\//_/g' |\
+   grep -e '0_0_40' -e '0_0_56' | awk '{print $1}' |\
+   cut -d @ -f 1 | sort | uniq -c | sort -k 1,1 -nr | head -n 1 |\
+   awk '{print $2}')
+  if [[ $QUEUE != *.q ]]; then
+    QUEUE='all.q'
+  fi
+  job_id=$(qsub -q $QUEUE -pe smp 1-128 -N TrimAsmAnnot.$b1 -e $OUTDIR/.log\
     -o $OUTDIR/.log -v R1=$read1,R2=$read2,B=$b1,O=$OUTDIR\
     $LAB_HOME/.job/_trim.asm.annot.uge-bash)
   echo "$job_id" >> $OUTDIR/.log/job_ids.txt
 done
 
 # Summarize reads and assemblies
-csv_jobs=$(cat $OUTDIR/.log/job_ids.txt | cut -f 3 -d ' ' |\
+JOBS=$(cat $OUTDIR/.log/job_ids.txt | cut -f 3 -d ' ' |\
   sed -e 's/$/,/' | tr -d '\n' | sed -e 's/,$//')
 a=$OUTDIR/asm
 r=$OUTDIR/trim_reads
-qsub -q all.q -pe smp 1-128 -N QA.reads.asm -e $OUTDIR/.log -o $OUTDIR/.log\
- -hold_jid $csv_jobs -v ASM_DIR=$a,TRIM_DIR=$r,O=$OUTDIR\
+qsub -q all.q -q short.q -pe smp 1-128 -N QA.reads.asm\
+ -e $OUTDIR/.log -o $OUTDIR/.log\
+ -hold_jid ${JOBS:-0000001} -v ASM_DIR=$a,TRIM_DIR=$r,O=$OUTDIR\
  $LAB_HOME/.job/_summarize.FastQ.FastA.uge-bash
 
 # Exit after annotating assemblies if < 3 samples
 [ ${#READS[@]} -lt 3 ] && { exit 0; }
 
 # Compute ANI values
-qsub -q all.q -pe smp 1-128 -N ANI -e $OUTDIR/.log -o $OUTDIR/.log\
- -hold_jid $csv_jobs -v ASM_DIR=$a,O=$OUTDIR\
+qsub -q all.q -q short.q -pe smp 1-128 -N ANI -e $OUTDIR/.log -o $OUTDIR/.log\
+ -hold_jid ${JOBS:-0000001} -v ASM_DIR=$a,O=$OUTDIR\
  $LAB_HOME/.job/_ani.uge-bash
 
 # Call SNPs from assembled genomes
-g=$OUTDIR/annot
-qsub -q all.q -pe smp 1-128 -N Parsnp -e $OUTDIR/.log -o $OUTDIR/.log\
- -hold_jid $csv_jobs -v ASM_DIR=$a,GBK_DIR=$g,O=$OUTDIR\
+qsub -q all.q -q short.q -pe smp 1-128 -N Parsnp -e $OUTDIR/.log\
+  -o $OUTDIR/.log -hold_jid ${JOBS:-0000001} -v ASM_DIR=$a,O=$OUTDIR\
  $LAB_HOME/.job/_parsnp.uge-bash
