@@ -142,6 +142,15 @@ if [[ $JID != *submitted* ]]; then
   exit 1
 fi
 echo "$JID" >> "$JOB_IDS"
+JID=$(qsub -q all.q -pe smp 1-128 -N phy.secY -o $OUT/.log -e $OUT/.log $JOBS \
+  -v PROD='preprotein translocase subunit SecY',LOGFILE=$LOGFILE,EXTRN=product\
+  -v GENE=secY,OUT=$OUT \
+  $LAB_HOME/.job/_gene.phylotree.uge-bash)
+if [[ $JID != *submitted* ]]; then
+  echo 'ERROR: improper job submission' >&2
+  exit 1
+fi
+echo "$JID" >> "$JOB_IDS"
 
 # Make trees and %nucl similarity matrices for genes found in GenBank files
 for g in atpD dnaJ glnA groL rpoA rpoB rpoC sodA tuf pheS thrC; do
