@@ -103,7 +103,7 @@ for A in "${ASM[@]}"; do
 		source /etc/profile.d/modules.sh
 		module load perl/5.16.1-MT prokka/1.8
 		prokka --outdir $OUT/annot/$B --prefix $B --addgenes --locustag $B \
-			--mincontiglen 250 --evalue 1e-06 --cpus \$NSLOTS --force $F
+			--mincontiglen 250 --evalue 1e-06 --cpus \$NSLOTS --force $IN/$A
 		rm -f "${OUT}/${B}/${B}.{err,ffn,fsa,log,sqn,tbl,txt}"
 		EOF
     )
