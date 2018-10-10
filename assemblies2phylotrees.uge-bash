@@ -88,28 +88,30 @@ fi
 
 echo "Annotating ${#ASM[@]} genomes..."
 echo -n '' > "$JOB_IDS"
+shopt -s globstar
 i=0
 for A in "${ASM[@]}"; do
   B=$(basename ${A%\.*} | sed 's/[_-\.\(\)]//g')
-  F=$(printf '%q\n' $IN/$A)
-  if [ 0 -lt $(ls $OUT/*/$B.gb{'',f,k} $OUT/$B.gb{'',f,k} 2> /dev/null | wc -l) ]; then
-    echo "Found $B annotated already; skipping prokka annotation... "
+  CNT_GBK=$(ls $OUT/$B.gb{'',f,k} $OUT/**/$B.gb{'',f,k} 2> /dev/null | wc -l)
+  if [ "${CNT_GBK}" -gt 0 ]; then
+    echo "Found $B annotated already; skipping prokka annotation..."
     continue
   fi
   JID=$(qsub -q all.q -pe smp 1-128 -N ann.$B -o $OUT/.log -e $OUT/.log <<- EOF
 	source /etc/profile.d/modules.sh
 	module load perl/5.16.1-MT prokka/1.8
 	prokka --outdir $OUT/phy/$B --prefix $B --addgenes --locustag $B \
-		--mincontiglen 250 --evalue 1e-06 --cpus \$NSLOTS --force $F
+		--mincontiglen 250 --evalue 1e-06 --cpus \$NSLOTS --force $IN/$A
 	module unload perl/5.16.1-MT prokka/1.8
 	mv -f $OUT/phy/$B/$B.gbf $OUT/phy/$B.gbk
-	rm -rf $OUT/phy/$B
+	rm -rf "$OUT/phy/$B/$B"
 	EOF
 	)
   check_submit_status "$JID" "$JOB_IDS"
   ((i++))
 done
 sleep 0.5
+shopt -u globstar
 
 # Extract sequence from each annotated file
 if [[ $i -gt 0 ]]; then
