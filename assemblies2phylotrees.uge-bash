@@ -129,20 +129,18 @@ JID=$(qsub -q all.q -pe smp 1-128 -N phy.16S -o $OUT/.log -e $OUT/.log $JOBS \
 check_submit_status "$JID" "$JOB_IDS"
 
 # Product name instead of gene name tree
-JID=$(qsub -q all.q -pe smp 1-128 -N phy.recA -o $OUT/.log -e $OUT/.log $JOBS \
-  -v PROD='recombinase A',GENE=recA,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=product \
-  $LAB_HOME/.job/_gene.phylotree.uge-bash)
-check_submit_status "$JID" "$JOB_IDS"
-JID=$(qsub -q all.q -pe smp 1-128 -N phy.secA -o $OUT/.log -e $OUT/.log $JOBS \
-  -v PROD='preprotein translocase subunit SecA',LOGFILE=$LOGFILE,EXTRN=product\
-  -v GENE=secA,OUT=$OUT \
-  $LAB_HOME/.job/_gene.phylotree.uge-bash)
-check_submit_status "$JID" "$JOB_IDS"
-JID=$(qsub -q all.q -pe smp 1-128 -N phy.secY -o $OUT/.log -e $OUT/.log $JOBS \
-  -v PROD='preprotein translocase subunit SecY',LOGFILE=$LOGFILE,EXTRN=product\
-  -v GENE=secY,OUT=$OUT \
-  $LAB_HOME/.job/_gene.phylotree.uge-bash)
-check_submit_status "$JID" "$JOB_IDS"
+declare -A GENE_PROD=(
+  [recA]='recombinase A'
+  [secA]='preprotein translocase subunit SecA'
+  [secY]='preprotein translocase subunit SecY'
+)
+for key in "${!GENE_PROD[@]}"; do
+  val="'${GENE_PROD[$key]}'"
+  JID=$(qsub -q all.q -pe smp 1-128 -N phy."$key" -o $OUT/.log -e $OUT/.log \
+    $JOBS -v PROD="$val",GENE="$key",OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=product \
+    $LAB_HOME/.job/_gene.phylotree.uge-bash)
+  check_submit_status "$JID" "$JOB_IDS"
+done
 
 # Make trees and %nucl similarity matrices for genes found in GenBank files
 for g in atpD dnaJ glnA groL rpoA rpoB rpoC sodA tuf pheS thrC; do
