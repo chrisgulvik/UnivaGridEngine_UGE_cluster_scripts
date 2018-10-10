@@ -31,9 +31,9 @@ function extraction_method() {
 }
 
 # Find annotated GenBank files
-shopt -s nullglob
-GBK=( "$OUT"/*.{gb,gbf,gbk} "$OUT"/*/*.{gb,gbf,gbk} )
-shopt -u nullglob
+shopt -s nullglob globstar
+GBK=( "$OUT"/*.{gb,gbf,gbk} "$OUT"/**/*.{gb,gbf,gbk} )
+shopt -u nullglob globstar
 if [[ "${#GBK[@]}" -lt 3 ]]; then
   echo "ERROR: at least 3 annotated files are required; found ${#GBK[@]}" >&2
   exit 1
