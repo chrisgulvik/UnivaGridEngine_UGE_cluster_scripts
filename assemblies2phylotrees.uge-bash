@@ -23,6 +23,16 @@ Optional:
   "
   }
 
+check_submit_status()
+{
+  # 1=job ID number; 2=job IDs logfile
+  if [[ $1 != *submitted* ]]; then
+    echo 'ERROR: improper job submission' >&2
+    exit 1
+  fi
+  echo "$1" >> "$2"
+}
+
 # Requirements
 command -v qsub >/dev/null 2>&1 || { echo 'ERROR: qsub not found' >&2; exit 1; }
 [[ $1 == "--help" || $1 == "-h" ]] && { usage; exit 0; }
@@ -96,11 +106,7 @@ for A in "${ASM[@]}"; do
 	rm -rf $OUT/phy/$B
 	EOF
 	)
-  if [[ $JID != *submitted* ]]; then
-    echo 'ERROR: improper job submission' >&2
-    exit 1
-  fi
-  echo "$JID" >> "$JOB_IDS"
+  check_submit_status "$JID" "$JOB_IDS"
   ((i++))
 done
 sleep 0.5
@@ -118,48 +124,28 @@ fi
 JID=$(qsub -q all.q -pe smp 1-128 -N phy.16S -o $OUT/.log -e $OUT/.log $JOBS \
   -v GENE=16S,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=rrna \
   $LAB_HOME/.job/_gene.phylotree.uge-bash)
-if [[ $JID != *submitted* ]]; then
-  echo 'ERROR: improper job submission' >&2
-  exit 1
-fi
-echo "$JID" >> "$JOB_IDS"
+check_submit_status "$JID" "$JOB_IDS"
 
 # Product name instead of gene name tree
 JID=$(qsub -q all.q -pe smp 1-128 -N phy.recA -o $OUT/.log -e $OUT/.log $JOBS \
   -v PROD='recombinase A',GENE=recA,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=product \
   $LAB_HOME/.job/_gene.phylotree.uge-bash)
-if [[ $JID != *submitted* ]]; then
-  echo 'ERROR: improper job submission' >&2
-  exit 1
-fi
-echo "$JID" >> "$JOB_IDS"
+check_submit_status "$JID" "$JOB_IDS"
 JID=$(qsub -q all.q -pe smp 1-128 -N phy.secA -o $OUT/.log -e $OUT/.log $JOBS \
   -v PROD='preprotein translocase subunit SecA',LOGFILE=$LOGFILE,EXTRN=product\
   -v GENE=secA,OUT=$OUT \
   $LAB_HOME/.job/_gene.phylotree.uge-bash)
-if [[ $JID != *submitted* ]]; then
-  echo 'ERROR: improper job submission' >&2
-  exit 1
-fi
-echo "$JID" >> "$JOB_IDS"
+check_submit_status "$JID" "$JOB_IDS"
 JID=$(qsub -q all.q -pe smp 1-128 -N phy.secY -o $OUT/.log -e $OUT/.log $JOBS \
   -v PROD='preprotein translocase subunit SecY',LOGFILE=$LOGFILE,EXTRN=product\
   -v GENE=secY,OUT=$OUT \
   $LAB_HOME/.job/_gene.phylotree.uge-bash)
-if [[ $JID != *submitted* ]]; then
-  echo 'ERROR: improper job submission' >&2
-  exit 1
-fi
-echo "$JID" >> "$JOB_IDS"
+check_submit_status "$JID" "$JOB_IDS"
 
 # Make trees and %nucl similarity matrices for genes found in GenBank files
 for g in atpD dnaJ glnA groL rpoA rpoB rpoC sodA tuf pheS thrC; do
   JID=$(qsub -q all.q -pe smp 1-128 -N phy.$g -o $OUT/.log -e $OUT/.log \
     $JOBS -v GENE=$g,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=gene \
     $LAB_HOME/.job/_gene.phylotree.uge-bash)
-  if [[ $JID != *submitted* ]]; then
-    echo 'ERROR: improper job submission' >&2
-    exit 1
-  fi
-  echo "$JID" >> "$JOB_IDS"
+  check_submit_status "$JID" "$JOB_IDS"
 done
