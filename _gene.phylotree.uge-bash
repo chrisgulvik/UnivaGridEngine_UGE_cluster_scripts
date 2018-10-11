@@ -81,8 +81,8 @@ module load ncbi-blast+/2.6.0
 python "$LAB_HOME"/.bin/calc.pairwise.similarities.py -e fa -p "$GENE". \
   -i "$OUT"/phy --aligner blastn -o "$OUT"/phy/"$GENE".PairSim.tsv
 module unload ncbi-blast+/2.6.0
-perl "$LAB_HOME"/.bin/pairwiseTo2d.pl < "$OUT"/phy/"$GENE".PairSim.tsv >\
-  "$OUT"/phy/"$GENE".Pairwise_Similarities.tab
+python "$LAB_HOME"/.bin/pairwiseTo2d.py -i "$OUT"/phy/"$GENE".PairSim.tsv \
+  --sort -o "$OUT"/phy/"$GENE".Pairwise_Similarities.tab
 rm "$OUT"/phy/"$GENE".PairSim.tsv
 
 # Merge and align extracted sequences
