@@ -50,19 +50,22 @@ else
   OUT=$(readlink -f "$2")
 fi
 [ ! -d "$OUT"/.log ] && mkdir -pv "$OUT"/.log > /dev/null
+LOG_BASE=$(basename $0 .uge-bash)
+LOGFILE="$OUT"/.log/"$LOG_BASE".log.txt
+JOB_IDS="$OUT"/.log/"$LOG_BASE".job_ids.txt
 
 # Log system and user info for debugging
-echo "[START]           $(date)" > "$OUT"/.log/log.txt
-echo "[SYS]             $(uname -nro)" >> "$OUT"/.log/log.txt
-echo "[USER]            $USER" >> "$OUT"/.log/log.txt
-echo "[CWD]             $PWD" >> "$OUT"/.log/log.txt
+echo "[START]           $(date)" > "$LOGFILE"
+echo "[SYS]             $(uname -nro)" >> "$LOGFILE"
+echo "[USER]            $USER" >> "$LOGFILE"
+echo "[CWD]             $PWD" >> "$LOGFILE"
 source /etc/profile.d/modules.sh && module purge
 echo "[MODULES LOADED]  $(module list 2>&1 | \
-  sed 's/Currently Loaded Modulefiles://1')" >> "$OUT"/.log/log.txt
-echo -e "[PATH]            $PATH\n" >> "$OUT"/.log/log.txt
-echo "[I/O]" >> "$OUT"/.log/log.txt
-echo "Input directory:  $IN" | tee -a "$OUT"/.log/log.txt
-echo -e "Output directory: $OUT\n" | tee -a "$OUT"/.log/log.txt
+  sed 's/Currently Loaded Modulefiles://1')" >> "$LOGFILE"
+echo -e "[PATH]            $PATH\n" >> "$LOGFILE"
+echo "[I/O]" >> "$LOGFILE"
+echo "Input directory:  $IN" | tee -a "$LOGFILE"
+echo -e "Output directory: $OUT\n" | tee -a "$LOGFILE"
 
 cd $IN
 if [[ $(find . -maxdepth 1 -type f -regextype posix-extended \
@@ -79,7 +82,7 @@ ASM=( *.{fa,fas,fsa,fna,fasta} )
 shopt -u nullglob
 [[ "${ASM[@]}" =~ "," ]] && { usage; exit 1; }
 echo -e "[ASSEMBLIES]\n$(echo ${ASM[@]} | tr ' ' '\n')\n" | \
-  tee -a "$OUT"/.log/log.txt
+  tee -a "$LOGFILE"
 
 if [ ${#ASM[@]} -lt 3 ]; then
   echo 'ERROR: at least 3 genomes are required for batch analysis' >&2
@@ -88,7 +91,7 @@ fi
 
 cd $OUT
 echo "Annotating ${#ASM[@]} genomes..."
-echo -n '' > "$OUT"/.log/job_ids.txt
+echo -n '' > "$JOB_IDS"
 FNA=()
 for A in "${ASM[@]}"; do
   B=$(basename ${A%\.*} | sed 's/[_-\.\(\)]//g')
@@ -101,14 +104,14 @@ for A in "${ASM[@]}"; do
   else
     JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N ann.$B -o $OUT/.log -e $OUT/.log <<- EOF
 		source /etc/profile.d/modules.sh
-		module load perl/5.16.1-MT prokka/1.8
+		module load perl/5.16.1-MT prokka/1.8 tbl2asn/25.3
 		prokka --outdir $OUT/annot/$B --prefix $B --addgenes --locustag $B \
 			--mincontiglen 250 --evalue 1e-06 --cpus \$NSLOTS --force $IN/$A
 		rm -f "${OUT}/${B}/${B}.{err,ffn,fsa,log,sqn,tbl,txt}"
 		EOF
     )
     [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
-    echo "$JID" >> "$OUT"/.log/job_ids.txt
+    echo "$JID" >> "$JOB_IDS"
     FNA+=("${OUT}/annot/${B}/${B}.fna")
   fi
 done
@@ -124,7 +127,7 @@ EOF
 )
 
 echo "Submitting ${#COMBO[@]} bidirectional ANI query jobs..."
-JOBS=$(cat "$OUT"/.log/job_ids.txt | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
+JOBS=$(cat "$JOB_IDS" | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
   tr -d '\n' | sed -e 's/,$//')
 for C in "${COMBO[@]}"; do
   C1=${C%%,*}
@@ -135,11 +138,11 @@ for C in "${COMBO[@]}"; do
     -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
     -v S1=$C1,S2=$C2,O=$OUT $LAB_HOME/.job/_ani.run.uge-bash)
   [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
-  echo "$JID" >> "$OUT"/.log/job_ids.txt
+  echo "$JID" >> "$JOB_IDS"
 done
 sleep 0.5
 
-JOBS=$(cat "$OUT"/.log/job_ids.txt | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
+JOBS=$(cat "$JOB_IDS" | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
   tr -d '\n' | sed -e 's/,$//')
 if [ ${#JOBS} -lt $((`getconf ARG_MAX`-300)) ]; then
   echo "Submitting ANI summary job..."
