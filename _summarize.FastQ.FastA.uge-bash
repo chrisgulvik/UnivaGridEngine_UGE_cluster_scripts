@@ -71,7 +71,10 @@ done
 
 # Report coverage
 while IFS=$'\t' read -r -a ln; do
-  basepairs=$(grep ${ln[0]} $O/qa/Summary.Illumina.CleanedReads-MappedBases.tab \
+  if grep -q "skesa_" <<< "${ln[0]}" || grep -q "unicyc_" <<< "${ln[0]}"; then
+    continue
+  fi
+  basepairs=$(grep ${ln[0]} $O/qa/Summary.Illumina.CleanedReads-AlnStats.tab \
    2> /dev/null | cut -f 2)
   if [[ ! "${basepairs}" =~ ^[0-9]+$ ]]; then
     basepairs=$(grep ${ln[0]} $O/qa/Summary.Illumina.CleanedReads-Bases.tab \
