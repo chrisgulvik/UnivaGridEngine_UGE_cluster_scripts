@@ -37,18 +37,23 @@ if [[ "$1" == "" || "$1" == "--help" || "$1" == "-h" ]]; then
         ANI.Summary.tab
     annot/
         <sampleA>.gbk
+        <sampleA>.faa.diamond-trembl.pdf
         <sampleB>.gbk
+        <sampleB>.faa.diamond-trembl.pdf
         <sampleC>.gbk
+        <sampleC>.faa.diamond-trembl.pdf
     asm/
         <sampleA>/
             assembly_graph_with_scaffolds.gfa
-            {contigs.fasta,params.txt,spades.log}.gz
+            contigs.fasta
+            {params.txt,spades.log}.gz
         <sampleB>/
             assembly_graph_with_scaffolds.gfa
-            {contigs.fasta,params.txt,spades.log}.gz
+            contigs.fasta
+            {params.txt,spades.log}.gz
         <sampleC>/
             assembly_graph_with_scaffolds.gfa
-            {contigs.fasta,params.txt,spades.log}.gz
+            {params.txt,spades.log}.gz
         <sampleA>.fna
         <sampleB>.fna
         <sampleC>.fna
@@ -62,9 +67,10 @@ if [[ "$1" == "" || "$1" == "--help" || "$1" == "-h" ]]; then
         SNP-distance.pairs.tsv
     qa/
         Summary.Assemblies.tab
+        Summary.Illumina.CleanedReads-AlnStats.tab
         Summary.Illumina.CleanedReads-Bases.tab
-        Summary.Illumina.CleanedReads-MappedBases.tab
         Summary.Illumina.GenomeCoverage.tab
+        Summary.Illumina.Pseudogenes.tab
     trim_reads/
         <sampleA>_R1.paired.fq.gz
         <sampleA>_R2.paired.fq.gz
@@ -118,16 +124,7 @@ for (( i=0; i<${#READS[@]}; i+=2 )); do
     exit 1
   fi
   echo "  $b1"
-  # Identify most available queue
-  QUEUE=$(qstat -f | grep -e '^short.q@node' -e '^all.q@node' |\
-   grep 'lx-amd64      $' | sed 's/\//_/g' |\
-   grep -e '0_0_40' -e '0_0_56' | awk '{print $1}' |\
-   cut -d @ -f 1 | sort | uniq -c | sort -k 1,1 -nr | head -n 1 |\
-   awk '{print $2}')
-  if [[ $QUEUE != *.q ]]; then
-    QUEUE='all.q'
-  fi
-  job_id=$(qsub -q $QUEUE -pe smp 1-128 -N TrimAsmAnnot.$b1 -e $OUTDIR/.log\
+  job_id=$(qsub -q all.q -q short.q -pe smp 1-128 -N TrimAsmAnnot.$b1 -e $OUTDIR/.log\
     -o $OUTDIR/.log -v R1=$read1,R2=$read2,B=$b1,O=$OUTDIR\
     $LAB_HOME/.job/_trim.asm.annot.uge-bash)
   echo "$job_id" >> $OUTDIR/.log/job_ids.txt
