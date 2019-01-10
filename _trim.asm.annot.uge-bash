@@ -1,6 +1,45 @@
 #!/usr/bin/env bash
 
 
+verify_file()
+{
+  # $1=filename; $2=file description
+  # $3=size in Bytes (requires c, k, M, or G prefix)
+  if [ -f  "${1}" ]; then
+    if [ -s  "${1}" ]; then
+      if [[ $(find "${1}" -type f -size +"${3}") ]]; then
+        :
+      else
+        echo "ERROR: ${2} file ${1} file present but < ${3}B" >&2
+        exit 1
+      fi
+    else
+      echo "ERROR: ${2} file ${1} file present but empty" >&2
+      exit 1
+    fi
+  else
+    echo "ERROR: ${2} file ${1} absent" >&2
+    exit 1
+  fi
+}
+
+get_GB_free_memory_total()
+{
+  # use 80% RAM capacity of the node
+  free --giga | grep '^Mem:' |\
+   awk '{print $2 " * 0.8"}' |\
+   bc | sed 's/\..*//'
+}
+
+get_MB_free_memory_per_thread()
+{
+  # $1=number of cpus
+  # use 80% RAM capacity of the node
+  free --mega | grep '^Mem:' |\
+   awk -v threads="${1}" '{print $2 " * 0.8 / " threads}' |\
+   bc | sed 's/\..*//'
+}
+
 # Input requirements
 source $HOME/.bashrc
 source /etc/profile.d/modules.sh
@@ -14,130 +53,323 @@ if [[ -z "$R1" || -z "$R2" || -z "$B" || -z "$O" ]]; then
 fi
 
 # Setup dir structure
+JOB_ID=$(basename $0)
 mkdir -p $O/{trim_reads,asm,annot,qa}
-
-# Remove PhiX
-module load java/jdk1.8.0_131 BBMap/35.92
-PHIX=$LAB_HOME/.lib/PhiX_NC_001422.1.fasta
-bbduk.sh -Xmx20g threads=$NSLOTS k=31 hdist=1 ref="$PHIX" in="$R1" in2="$R2"\
- out=$O/trim_reads/"$B"-noPhiX-R1.fsq out2=$O/trim_reads/"$B"-noPhiX-R2.fsq\
- overwrite=t
-module unload java/jdk1.8.0_131 BBMap/35.92
-
-# Adapter clip and quality trim
-module load java/jdk1.8.0_131 trimmomatic/0.35
-ADAPTERS=$LAB_HOME/.lib/adapters_Nextera_NEB_TruSeq_NuGEN.fas
-trimmomatic PE -phred33 -threads $NSLOTS\
- $O/trim_reads/"$B"-noPhiX-R1.fsq $O/trim_reads/"$B"-noPhiX-R2.fsq\
- $O/trim_reads/"$B"_R1.paired.fq $O/trim_reads/"$B"_R1.unpaired.fq\
- $O/trim_reads/"$B"_R2.paired.fq $O/trim_reads/"$B"_R2.unpaired.fq\
- ILLUMINACLIP:$ADAPTERS:2:20:10:8:TRUE\
- SLIDINGWINDOW:6:30 LEADING:10 TRAILING:10 MINLEN:50
-rm -f $O/trim_reads/"$B"-noPhiX-R1.fsq $O/trim_reads/"$B"-noPhiX-R2.fsq
-cat $O/trim_reads/"$B"_R1.unpaired.fq $O/trim_reads/"$B"_R2.unpaired.fq\
- > $O/trim_reads/"$B".single.fq
-rm -f $O/trim_reads/"$B"_R1.unpaired.fq $O/trim_reads/"$B"_R2.unpaired.fq
-module unload java/jdk1.8.0_131 trimmomatic/0.35
-for suff in _R1.paired.fq _R2.paired.fq ; do
-  if [[ ! $(find $O/trim_reads/"$B""$suff" -type f -size +25M) ]]; then
-    echo "ERROR: trimmed read unusually small for ${B}${suff}" >&2
-    exit 1
-  fi
-done
-
-# # Paired end overlap
-# module load pear/0.9.10
-# pear -f $O/trim_reads/"$B"_R1.paired.fq -r $O/trim_reads/"$B"_R2.paired.fq\
-#  -o $O/trim_reads/$B --keep-original --p-value 0.01 --min-overlap 200\
-#  --threads $NSLOTS
-# module unload pear/0.9.10
-# rm $O/trim_reads/"$B"_R1.paired.fq $O/trim_reads/"$B"_R2.paired.fq
-# mv $O/trim_reads/"$B".unassembled.forward.fastq $O/trim_reads/"$B"_R1.paired.fq
-# mv $O/trim_reads/"$B".unassembled.reverse.fastq $O/trim_reads/"$B"_R2.paired.fq
-# ls -lh $O/trim_reads/"$B".assembled.fastq
-# cat $O/trim_reads/"$B".assembled.fastq >> $O/trim_reads/"$B".single.fq
-# rm $O/trim_reads/"$B".assembled.fastq
-
-# Assemble; quit after 3 failed attempts
-failed=0
-while [[ ! -f $O/asm/"$B"/contigs.fasta ]] && [ $failed -lt 3 ]; do
-  if [ $failed -gt 0 ]; then
-    echo "ERROR: assembly file not produced by SPAdes for $B" >&2
-    mv -f $O/asm/"$B"/spades.log $O/asm/"$B"/"$failed"of3-asm-attempt-failed.spades.log
-    echo "INFO: retrying assembly for $B" >&2
-  fi
-  module load SPAdes/3.11.1
-  spades.py --pe1-1 $O/trim_reads/"$B"_R1.paired.fq\
-   --pe1-2 $O/trim_reads/"$B"_R2.paired.fq\
-   --pe1-s $O/trim_reads/"$B".single.fq\
-   -o $O/asm/"$B" --phred-offset 33\
-   -t $NSLOTS --only-assembler --continue
-  module unload SPAdes/3.11.1
-  ((failed++))
-done
-if [[ ! -f "$O"/asm/"$B"/contigs.fasta ]]; then
-  echo "ERROR: assembly file not produced by SPAdes for $B" >&2
+TMP_DIR=$(mktemp --tmpdir=/dev/shm \
+ --directory "${USER}"."${JOB_ID}".XXXXXX)
+if [ $? -ne 0 ]; then
+  echo 'ERROR: failed to make /dev/shm temporary ramdisk dir' >&2
+  echo 'INFO: using /tmp HDD space for temporary space' >&2
+  TMP_DIR=$(mktemp --tmpdir=/tmp \
+   --directory "${USER}"."${JOB_ID}".XXXXXX)
+  echo "INFO: using $TMP_DIR temporary HDD dir" >&2
+else
+  echo "INFO: using $TMP_DIR temporary ramdisk dir" >&2
+fi
+trap '{ rm -rfv "$TMP_DIR"; exit; }' EXIT INT QUIT TERM
+if [ ! -d "$TMP_DIR" ]; then
+  echo "ERROR: absent $TMP_DIR directory" >&2
   exit 1
 fi
 
-# Clean up asm dir and compress reads
-bash $LAB_HOME/.bin/prune.SPAdes.assembly.dirs.bash $O/asm/"$B"
-pigz --best $O/trim_reads/"$B".single.fq\
- $O/trim_reads/"$B"_R1.paired.fq\
- $O/trim_reads/"$B"_R2.paired.fq
+# Initial node resources
+echo "INFO: $NSLOTS CPUs available" >&2
+RAMSIZE_TOT=$(get_GB_free_memory_total)
+RAMSIZE_PER_THREAD=$(get_MB_free_memory_per_thread "$NSLOTS")
+echo "INFO: ${RAMSIZE_TOT}GB total and ${RAMSIZE_PER_THREAD}MB per thread" >&2
 
-# Post-process assembly
+# Clean reads
+if [[ $(find $O/trim_reads/"$B"_R1.paired.fq.gz -type f -size +10M 2> /dev/null) ]] && \
+ [[ $(find $O/trim_reads/"$B"_R2.paired.fq.gz -type f -size +10M 2> /dev/null) ]] && \
+ [[ $(find $O/trim_reads/"$B".single.fq.gz -type f -size +5k 2> /dev/null) ]]; then
+  echo "INFO: found cleaned reads for $B" >&2
+else
+  # Determine read length based on the first 100 reads
+  READ_LEN=$(zcat "$R1" | head -n 400 |\
+   awk 'NR%4==2 {if(length > x) {x=length; y=$0}} END{print length(y)}')
+  OVERLAP_LEN=$(echo "$READ_LEN * 0.8" | bc | sed 's/\..*//')
+  echo "INFO: $READ_LEN bp read length detected from raw input" >&2
+
+  # Remove PhiX
+  module load java/jdk1.8.0_131 BBMap/35.92
+  RAMSIZE_TOT=$(get_GB_free_memory_total)
+  PHIX=$LAB_HOME/.lib/PhiX_NC_001422.1.fasta
+  bbduk.sh -Xmx"$RAMSIZE_TOT"g threads=$NSLOTS k=31 hdist=1\
+   ref="$PHIX" in="$R1" in2="$R2"\
+   out=$O/trim_reads/"$B"-noPhiX-R1.fsq out2=$O/trim_reads/"$B"-noPhiX-R2.fsq\
+   qin=auto qout=33 overwrite=t
+  module unload java/jdk1.8.0_131 BBMap/35.92
+  TOT_READS=$(grep '^Input: ' $O/.log/TrimAsmAnnot.${B}.e${JOB_ID} \
+   | awk '{print $2}')
+  TOT_BASES=$(grep '^Input: ' $O/.log/TrimAsmAnnot.${B}.e${JOB_ID} \
+   | awk '{print $4}')
+  PHIX_READS=$(grep '^Contaminants: ' $O/.log/TrimAsmAnnot.${B}.e${JOB_ID} \
+   | awk '{print $2}' | sed 's/,//g')
+  PHIX_BASES=$(grep '^Contaminants: ' $O/.log/TrimAsmAnnot.${B}.e${JOB_ID} \
+   | awk '{print $5}' | sed 's/,//g')
+  echo "INFO: $TOT_BASES bp and $TOT_READS reads provided as raw input" >&2
+  echo "INFO: $PHIX_BASES bp of PhiX were detected and removed in $PHIX_READS reads" >&2
+  echo -e "${B}\t${TOT_BASES} bp Raw\t${TOT_READS} reads Raw" \
+   > $O/trim_reads/"$B".raw.tsv
+  echo -e "${B}\t${PHIX_BASES} bp PhiX\t${PHIX_READS} reads PhiX" \
+   > $O/trim_reads/"$B".phix.tsv
+
+  # Adapter clip and quality trim
+  module load java/jdk1.8.0_131 trimmomatic/0.35
+  ADAPTERS=$LAB_HOME/.lib/adapters_Nextera_NEB_TruSeq_NuGEN.fas
+  trimmomatic PE -phred33 -threads $NSLOTS\
+   $O/trim_reads/"$B"-noPhiX-R1.fsq $O/trim_reads/"$B"-noPhiX-R2.fsq\
+   $O/trim_reads/"$B"_R1.paired.fq $O/trim_reads/"$B"_R1.unpaired.fq\
+   $O/trim_reads/"$B"_R2.paired.fq $O/trim_reads/"$B"_R2.unpaired.fq\
+   ILLUMINACLIP:$ADAPTERS:2:20:10:8:TRUE\
+   SLIDINGWINDOW:6:30 LEADING:10 TRAILING:10 MINLEN:50
+  rm -f $O/trim_reads/"$B"-noPhiX-R1.fsq $O/trim_reads/"$B"-noPhiX-R2.fsq
+  TRIMMO_DISCARD=$(grep '^Input Read Pairs: ' $O/.log/TrimAsmAnnot.${B}.e${JOB_ID} \
+   | grep ' Dropped: ' | awk '{print $20}')
+  echo "INFO: $TRIMMO_DISCARD reads are poor quality and were discarded" >&2
+  CNT_BROKEN_R1=$(awk '{lines++} END{print lines/4}' \
+   $O/trim_reads/"$B"_R1.unpaired.fq)
+  CNT_BROKEN_R2=$(awk '{lines++} END{print lines/4}' \
+   $O/trim_reads/"$B"_R2.unpaired.fq)
+  CNT_BROKEN=$((${CNT_BROKEN_R1} + ${CNT_BROKEN_R2}))
+  echo "INFO: $CNT_BROKEN_R1 forward reads lacked a high quality R2 sister read" >&2
+  echo "INFO: $CNT_BROKEN_R2 reverse reads lacked a high quality R1 sister read" >&2
+  echo "INFO: $CNT_BROKEN total broken read pairs were saved as singletons" >&2
+  echo -e "${B}\t${TRIMMO_DISCARD} reads Discarded\t${CNT_BROKEN} reads Singletons" \
+   > $O/trim_reads/"$B".trimmo.tsv
+  cat $O/trim_reads/"$B"_R1.unpaired.fq $O/trim_reads/"$B"_R2.unpaired.fq\
+   > $O/trim_reads/"$B".single.fq
+  rm -f $O/trim_reads/"$B"_R1.unpaired.fq $O/trim_reads/"$B"_R2.unpaired.fq
+  module unload java/jdk1.8.0_131 trimmomatic/0.35
+  for suff in _R1.paired.fq _R2.paired.fq ; do
+    verify_file "$O/trim_reads/${B}${suff}" 'cleaned read' '25M'
+  done
+
+  # Merge overlapping sister reads into singleton reads
+  if [ $OVERLAP_LEN -gt 0 ]; then
+    echo "INFO: $OVERLAP_LEN bp overlap will be required for sister reads to be merged" >&2
+    module load pear/0.9.10
+    pear -f $O/trim_reads/"$B"_R1.paired.fq -r $O/trim_reads/"$B"_R2.paired.fq\
+     -o $O/trim_reads/$B --keep-original --p-value 0.01 --min-overlap $OVERLAP_LEN\
+     --threads $NSLOTS >&2
+    module unload pear/0.9.10
+    for suff in .unassembled.forward.fastq .unassembled.reverse.fastq ; do
+      verify_file "$O/trim_reads/${B}${suff}" 'cleaned non-overlapping read' '20M'
+    done
+    rm $O/trim_reads/"$B"_R1.paired.fq $O/trim_reads/"$B"_R2.paired.fq
+    mv $O/trim_reads/"$B".unassembled.forward.fastq $O/trim_reads/"$B"_R1.paired.fq
+    mv $O/trim_reads/"$B".unassembled.reverse.fastq $O/trim_reads/"$B"_R2.paired.fq
+    if [ -f  $O/trim_reads/"$B".assembled.fastq ] && \
+    [ -s  $O/trim_reads/"$B".assembled.fastq ]; then
+      CNT_READS_OVERLAPPED=$(awk '{lines++} END{print lines/4}' \
+       $O/trim_reads/"$B".assembled.fastq)
+      echo "INFO: $CNT_READS_OVERLAPPED pairs overlapped into singleton reads" >&2
+      cat $O/trim_reads/"$B".assembled.fastq >> $O/trim_reads/"$B".single.fq
+      rm $O/trim_reads/"$B".{assembled,discarded}.fastq
+    else
+      CNT_READS_OVERLAPPED=0
+      echo "INFO: 0 pairs overlapped into singleton reads" >&2
+    fi
+    echo -e "${B}\t${CNT_READS_OVERLAPPED} reads Overlapped" \
+     > $O/trim_reads/"$B".overlap.tsv
+  fi
+
+  # Summarize final read set and compress
+  CNT_CLEANED_PAIRS=$(echo $(cat $O/trim_reads/"$B"_R1.paired.fq | wc -l) / 4 | bc)
+  CNT_CLEANED_SINGLETON=$(echo $(cat $O/trim_reads/"$B".single.fq | wc -l) / 4 | bc)
+  echo -e "${B}\t${CNT_CLEANED_PAIRS} cleaned pairs\t${CNT_CLEANED_SINGLETON} cleaned singletons" \
+   > $O/trim_reads/"$B".clean-reads.tsv
+  pigz --best $O/trim_reads/"$B".single.fq\
+   $O/trim_reads/"$B"_R1.paired.fq\
+   $O/trim_reads/"$B"_R2.paired.fq
+fi
+
+# Assemble with SKESA
+module load Skesa/2.3.0
+RAMSIZE_TOT=$(get_GB_free_memory_total)
+skesa --contigs_out $O/asm/skesa_"$B" --vector_percent 1\
+ --fastq $O/trim_reads/"$B"_R1.paired.fq.gz,$O/trim_reads/"$B"_R2.paired.fq.gz\
+ --cores $NSLOTS --memory $RAMSIZE_TOT
+module unload Skesa/2.3.0
+verify_file "$O/asm/skesa_$B" 'SKESA output assembly' '2M'
+
+# Assemble with SPAdes
+spades_continue=''
+failed=0
+while [[ ! -f $O/asm/"$B"/contigs.fasta ]] && [ $failed -lt 2 ]; do
+  if [ $failed -gt 0 ]; then
+    echo "ERROR: assembly file not produced by SPAdes for $B" >&2
+    mv -f $O/asm/"$B"/spades.log \
+     $O/asm/"$B"/"$failed"of3-asm-attempt-failed.spades.log 2> /dev/null
+    echo "INFO: SPAdes failure $failed; retrying assembly for $B" >&2
+    # SPAdes v3.12.0+ no longer allows --continue with other opts
+    spades_continue='--restart-from last'
+  fi
+  module load SPAdes/3.12.0
+  RAMSIZE_TOT=$(get_GB_free_memory_total)
+  spades.py --pe1-1 $O/trim_reads/"$B"_R1.paired.fq.gz\
+   --pe1-2 $O/trim_reads/"$B"_R2.paired.fq.gz\
+   --pe1-s $O/trim_reads/"$B".single.fq.gz\
+   --tmp-dir "$TMP_DIR" --memory "$RAMSIZE_TOT"\
+   -o $O/asm/"$B" --phred-offset 33\
+   -t $NSLOTS --only-assembler $spades_continue >&2
+  module unload SPAdes/3.12.0
+  ((failed++))
+done
+verify_file "${O}/asm/${B}/contigs.fasta" 'SPAdes output assembly' '2M'
+bash $LAB_HOME/.bin/prune.SPAdes.assembly.dirs.bash $O/asm/"$B"
+
+# Post-process SPAdes and SKESA assemblies
 export PATH=$LAB_HOME/.anaconda2/bin:$PATH
 source activate bpy2
 python $LAB_HOME/.bin/filter.contigs.py\
  -i $O/asm/"$B"/contigs.fasta\
- -b "$B" -l 1000 -o $O/asm/"$B".uncorrected.fna 
-source deactivate bpy2
+ -b "$B" -l 1000 -o $O/asm/"$B".uncorrected.fna
+python $LAB_HOME/.bin/filter.contigs.py\
+ -i $O/asm/skesa_"$B"\
+ -b "$B" -l 1000 -o $O/asm/skesa_"$B".fna
+source deactivate
+rm $O/asm/skesa_"$B"
 
-# Verify sufficient bacterial genome size
-if [[ ! $(find $O/asm/"$B".uncorrected.fna -type f -size +2M) ]]; then
-  rm -f $O/asm/$B.uncorrected.fna
-  echo "ERROR: genome assembly unusually small for $B" >&2
-  echo "check $O/asm/$B/spades.log for details"
-  exit 1
-fi
+# Assemble with Unicycler and cleanup
+module load ncbi-blast+/2.6.0 SPAdes/3.12.0 bowtie2/2.3.3.1 \
+ samtools/1.8 java/jdk1.8.0_131 pilon/1.22 bcftools/1.7 \
+ ALE/20130717 gcc/5.4
+source activate py3unicycler
+unicycler -1 $O/trim_reads/"$B"_R1.paired.fq.gz \
+ -2 $O/trim_reads/"$B"_R2.paired.fq.gz \
+ -s $O/trim_reads/"$B".single.fq.gz \
+ --out $O/asm/unicyc_"$B" \
+ --spades_tmp_dir "$TMP_DIR" --min_polish_size 1000 \
+ -t $NSLOTS --min_fasta_length 1000 --keep 0 --verbosity 2 >&2
+source deactivate
+module unload ncbi-blast+/2.6.0 SPAdes/3.12.0 bowtie2/2.3.3.1 \
+ samtools/1.8 java/jdk1.8.0_131 pilon/1.22 bcftools/1.7 \
+ ALE/20130717 gcc/5.4
+mv -f $O/asm/unicyc_"$B"/assembly.fasta $O/asm/unicyc_"$B".fna
+pigz -9f $O/asm/unicyc_"$B"/{assembly.gfa,unicycler.log}
 
-# Correct cleaned contigs with cleaned reads
-module load bwa/0.7.16 samtools/1.4.1 pilon/1.22
+# Verify sufficient bacterial genome size after filtering assemblies
+verify_file "$O/asm/$B.uncorrected.fna" 'filtered SPAdes assembly' '2M'
+verify_file "$O/asm/skesa_$B.fna" 'filtered SKESA assembly' '2M'
+verify_file "$O/asm/unicyc_$B.fna" 'Unicycler output assembly' '2M'
+
+# Correct cleaned SPAdes contigs with cleaned reads
+module load bwa/0.7.17 samtools/1.8 java/jdk1.8.0_131 pilon/1.22
 for _ in {1..3}; do
   bwa index $O/asm/"$B".uncorrected.fna
+  RAMSIZE_PER_THREAD=$(get_MB_free_memory_per_thread "$NSLOTS")
   bwa mem -t $NSLOTS -x intractg -v 3 $O/asm/"$B".uncorrected.fna\
    $O/trim_reads/"$B"_R1.paired.fq.gz $O/trim_reads/"$B"_R2.paired.fq.gz |\
    samtools sort -@ $NSLOTS --reference $O/asm/"$B".uncorrected.fna -l 9\
-   -o $O/asm/"$B".bam
+   -T "$TMP_DIR" -m "$RAMSIZE_PER_THREAD"M -o $O/asm/"$B".bam
   rm -f $O/asm/"$B".uncorrected.fna.{ann,amb,bwt,pac,sa}
+  verify_file "$O/asm/$B.bam" 'binary sequence alignment map' '25M'
   samtools index $O/asm/"$B".bam
   pilon --genome $O/asm/"$B".uncorrected.fna --frags $O/asm/"$B".bam\
    --output "$B" --outdir $O/asm --changes --tracks --verbose\
-   --fix snps,indels --mindepth 0.50
+   --fix snps,indels --mindepth 0.50 --threads $NSLOTS
+  verify_file "$O/asm/$B.uncorrected.fna" 'polished assembly' '2M'
   grep -c '-' $O/asm/"$B".changes >> $O/asm/"$B".InDels-corrected.cnt.txt
   grep -vc '-' $O/asm/"$B".changes >> $O/asm/"$B".SNPs-corrected.cnt.txt
-  rm -f $O/asm/"$B".{changes,uncorrected.fna}
-  rm -f $O/asm/"$B"{*.wig,Pilon.bed}
-  mv -f $O/asm/"$B".fasta $O/asm/"$B".uncorrected.fna
-  sed -i 's/_pilon//g' $O/asm/"$B".uncorrected.fna
+  rm -fv $O/asm/"$B".{changes,uncorrected.fna}
+  rm -fv $O/asm/"$B"{*.wig,Pilon.bed}
+  mv -fv $O/asm/"$B".fasta $O/asm/"$B".uncorrected.fna
+  sed -i 's/_pilon//1' $O/asm/"$B".uncorrected.fna
 done
-module unload bwa/0.7.16 samtools/1.4.1 pilon/1.22
+module unload bwa/0.7.17 samtools/1.8 java/jdk1.8.0_131 pilon/1.22
 mv -f $O/asm/"$B".uncorrected.fna $O/asm/"$B".fna
+verify_file "$O/asm/$B.fna" 'corrected SPAdes assembly' '2M'
 
 # Calculate coverage
-module load BEDTools/2.26.0
-sum_cov=$(bedtools genomecov -d -split -ibam $O/asm/"$B".bam \
- -g $O/asm/"$B".fna | awk '{sum+=$3} END{print sum}')
-module unload BEDTools/2.26.0
+module load BEDTools/2.27.1
+cov_nfo=$(bedtools genomecov -d -split -ibam $O/asm/"$B".bam |\
+ awk '{sum+=$3} END{print sum " bp Reads Mapped\t" NR " bp Genome Size\t" sum/NR"x"}')
+module unload BEDTools/2.27.1
 rm -f $O/asm/"$B".{bam.bai,bam}
-echo -e "${B}\t${sum_cov}" >> $O/qa/Summary.Illumina.CleanedReads-MappedBases.tab
+echo -e "${B}\t${cov_nfo}" >> \
+ $O/qa/Summary.Illumina.CleanedReads-AlnStats.tab
 
 # Annotate cleaned and corrected assembly
-module load perl/5.16.1-MT prokka/1.12
+module load perl/5.16.1-MT prokka/1.13.3
 prokka --outdir $O/annot/"$B" --prefix "$B"\
  --force --addgenes --locustag "$B" --mincontiglen 500\
  --evalue 1e-08 --cpus $NSLOTS $O/asm/"$B".fna
-module unload perl/5.16.1-MT prokka/1.12
-mv -f $O/annot/$B/$B.gbf $O/annot/$B.gbk
+module unload perl/5.16.1-MT prokka/1.13.3
+verify_file "$O/annot/$B/$B.faa" 'annotated proteome' '100k'
+verify_file "$O/annot/$B/$B.gbk" 'annotated assembly' '3M'
+mv -f $O/annot/$B/$B.gbk $O/annot/$B.gbk
+
+# MLST for each assembly because Torsten made it so simple
+module load mlst/2.9
+mlst --threads $NSLOTS $O/asm/"$B".fna \
+ $O/asm/skesa_"$B".fna $O/asm/unicyc_"$B".fna \
+ >> $O/qa/Summary.MLST.tab
+module unload mlst/2.9
+
+# Investigate taxonomic identity of cleaned reads
+export KRAKEN_DEFAULT_DB=/scicomp/reference/kraken/0.10.5/standard
+module load kraken/1.0.0
+kraken --threads $NSLOTS --fastq-input --gzip-compressed \
+ $O/trim_reads/"$B"_R1.paired.fq.gz $O/trim_reads/"$B"_R2.paired.fq.gz \
+ $O/trim_reads/"$B".single.fq.gz | kraken-report \
+ > $O/trim_reads/"$B"_kraken.tab
+module unload kraken/1.0.0
+bash $LAB_HOME/.bin/summarize_kraken.sh $O/trim_reads/"$B"_kraken.tab >> \
+ $O/trim_reads/"$B".taxonomy-reads.tab
+pigz -9f $O/trim_reads/"$B"_kraken.tab
+
+module load kraken/2.0.0
+export KRAKEN2_DEFAULT_DB=/scicomp/reference/kraken/2.0.0
+kraken2 --threads $NSLOTS --gzip-compressed \
+ --use-names --report $O/trim_reads/"$B"_kraken2.tab \
+ $O/trim_reads/"$B"_R1.paired.fq.gz $O/trim_reads/"$B"_R2.paired.fq.gz \
+ $O/trim_reads/"$B".single.fq.gz
+module unload kraken/2.0.0
+bash $LAB_HOME/.bin/summarize_kraken.sh $O/trim_reads/"$B"_kraken2.tab >> \
+ $O/trim_reads/"$B".taxonomy2-reads.tab
+pigz -9f $O/trim_reads/"$B"_kraken2.tab
+
+# Run proteome against UniProt's TrEMBL db
+verify_file "$LAB_HOME/.lib/uniprot_trembl.dmnd" 'uniprot_trembl.dmnd' '60G'
+module load diamond/0.9.22
+diamond blastp --threads $NSLOTS \
+ --db "$LAB_HOME"/.lib/uniprot_trembl.dmnd \
+ --query $O/annot/$B/$B.faa \
+ --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen\
+ --out $O/annot/$B.faa.diamond-trembl.full.tab \
+ --tmpdir "$TMP_DIR" \
+ --verbose
+module unload diamond/0.9.22
+verify_file "$O/annot/$B.faa.diamond-trembl.full.tab" 'UniProtKB/TrEMBL protein alignment' '1k'
+python $LAB_HOME/.bin/filter.blast.py \
+ -i $O/annot/$B.faa.diamond-trembl.full.tab \
+ -o $O/annot/$B.faa.diamond-trembl.tsv
+verify_file "$O/annot/$B.faa.diamond-trembl.tsv" 'filtered UniProtKB/TrEMBL protein alignment' '1k'
+rm -f $O/annot/$B.faa.diamond-trembl.full.tab
+GENES_TOTAL=$(grep -c '>' $O/annot/$B/$B.faa)
+GENES_SM=$(awk '$13/$14<0.9{c++} END{print c+0}' $O/annot/$B.faa.diamond-trembl.tsv)
+GENES_LG=$(awk '$13/$14>1.1{c++} END{print c+0}' $O/annot/$B.faa.diamond-trembl.tsv)
+echo -e "${B}\t${GENES_TOTAL} genes total\t${GENES_SM} genes 10% smaller than expected\t${GENES_LG} genes 10% larger than expected" \
+ >> $O/qa/Summary.Illumina.Pseudogenes.tab
+
+# Plot sample's protein sizes relative to best TrEMBL hits
+module load R/3.5.0
+echo "
+filein  = '$O/annot/$B.faa.diamond-trembl.tsv'
+fileout = '$O/annot/$B.faa.diamond-trembl.pdf'
+data <- read.table(filein, sep='\t', header=FALSE)
+bks <- seq(0, max(data\$V13/data\$V14)+1, by=0.05)
+pdf(fileout, width=10, height=10)
+hist(data\$V13/data\$V14, breaks=bks, col='red',
+ xlim=c(0,2), xlab='query len / hit len', ylab='frequency', main=filein)
+dev.off() 
+fileout <- gsub('.pdf', '.y-lim=500.pdf', fileout)
+pdf(fileout, width=10, height=10)
+hist(data\$V13/data\$V14, breaks=bks, col='purple', ylim=c(0,500),
+ xlim=c(0,2), xlab='query len / hit len', ylab='frequency', main=filein)
+dev.off()
+" | R --slave --vanilla
+module unload R/3.5.0
+pigz -9f $O/annot/$B.faa.diamond-trembl.tsv
 rm -rf $O/annot/$B
