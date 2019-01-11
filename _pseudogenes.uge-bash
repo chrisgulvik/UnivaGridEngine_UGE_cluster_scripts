@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+
+
+verify_file()
+{
+  # $1=filename; $2=file description
+  # $3=size in Bytes (requires c, k, M, or G prefix)
+  if [ -f  "${1}" ]; then
+    if [ -s  "${1}" ]; then
+      if [[ $(find "${1}" -type f -size +"${3}") ]]; then
+        :
+      else
+        echo "ERROR: ${2} file ${1} file present but < ${3}B" >&2
+        exit 1
+      fi
+    else
+      echo "ERROR: ${2} file ${1} file present but empty" >&2
+      exit 1
+    fi
+  else
+    echo "ERROR: ${2} file ${1} absent" >&2
+    exit 1
+  fi
+}
+
+get_GB_free_memory_total()
+{
+  # use 80% RAM capacity of the node
+  free --giga | grep '^Mem:' |\
+   awk '{print $2 " * 0.8"}' |\
+   bc | sed 's/\..*//'
+}
+
+get_MB_free_memory_per_thread()
+{
+  # $1=number of cpus
+  # use 80% RAM capacity of the node
+  free --mega | grep '^Mem:' |\
+   awk -v threads="${1}" '{print $2 " * 0.8 / " threads}' |\
+   bc | sed 's/\..*//'
+}
+
+# Input requirements
+source $HOME/.bashrc
+source /etc/profile.d/modules.sh
+if [[ -z "$LAB_HOME" ]]; then
+  echo 'ERROR: $LAB_HOME not set' >&2
+  exit 1
+fi
+if [[ -z "$ASM" || -z "$B" || -z "$O" ]]; then
+  echo 'ERROR: ASM B O (3 variables required)' >&2
+  exit 1
+fi
+
+# Setup dir structure
+JOB_ID=$(basename $0)
+mkdir -p $O/{annot,qa}
+TMP_DIR=$(mktemp --tmpdir=/dev/shm \
+ --directory "${USER}"."${JOB_ID}".XXXXXX)
+if [ $? -ne 0 ]; then
+  echo 'ERROR: failed to make /dev/shm temporary ramdisk dir' >&2
+  echo 'INFO: using /tmp HDD space for temporary space' >&2
+  TMP_DIR=$(mktemp --tmpdir=/tmp \
+   --directory "${USER}"."${JOB_ID}".XXXXXX)
+  echo "INFO: using $TMP_DIR temporary HDD dir" >&2
+else
+  echo "INFO: using $TMP_DIR temporary ramdisk dir" >&2
+fi
+trap '{ rm -rfv "$TMP_DIR"; exit; }' EXIT INT QUIT TERM
+if [ ! -d "$TMP_DIR" ]; then
+  echo "ERROR: absent $TMP_DIR directory" >&2
+  exit 1
+fi
+
+# Initial node resources
+echo "INFO: $NSLOTS CPUs available" >&2
+RAMSIZE_TOT=$(get_GB_free_memory_total)
+RAMSIZE_PER_THREAD=$(get_MB_free_memory_per_thread "$NSLOTS")
+echo "INFO: ${RAMSIZE_TOT}GB total and ${RAMSIZE_PER_THREAD}MB per thread" >&2
+
+# Annotate cleaned and corrected assembly
+if [[ $(find $O/annot/$B/$B.faa -type f -size +100k 2> /dev/null) ]]; then
+  echo "INFO: found annotation file for $B; skipping prokka" >&2
+else
+  module load perl/5.16.1-MT prokka/1.13.3
+  prokka --outdir $O/annot/"$B" --prefix "$B"\
+   --force --addgenes --locustag "$B" --mincontiglen 500\
+   --evalue 1e-08 --cpus $NSLOTS $ASM
+  module unload perl/5.16.1-MT prokka/1.13.3
+  mv -f $O/annot/$B/$B.gbk $O/annot/$B.gbk
+fi
+
+# Run proteome against UniProt's TrEMBL db
+module load diamond/0.9.22
+diamond blastp --threads $NSLOTS \
+ --db "$LAB_HOME"/.lib/uniprot_trembl.dmnd \
+ --query $O/annot/$B/$B.faa \
+ --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen\
+ --out $O/annot/$B.faa.diamond-trembl.full.tab \
+ --tmpdir "$TMP_DIR" \
+ --verbose
+module unload diamond/0.9.22
+python $LAB_HOME/.bin/filter.blast.py \
+ -i $O/annot/$B.faa.diamond-trembl.full.tab \
+ -o $O/annot/$B.faa.diamond-trembl.tsv
+rm -f $O/annot/$B.faa.diamond-trembl.full.tab
+GENES_TOTAL=$(grep -c '>' $O/annot/$B/$B.faa)
+GENES_SM=$(awk '$13/$14<0.9{c++} END{print c+0}' $O/annot/$B.faa.diamond-trembl.tsv)
+GENES_LG=$(awk '$13/$14>1.1{c++} END{print c+0}' $O/annot/$B.faa.diamond-trembl.tsv)
+echo -e "${B}\t${GENES_TOTAL} genes total\t${GENES_SM} genes 10% smaller than expected\t${GENES_LG} genes 10% larger than expected" \
+ >> $O/qa/Summary.Illumina.Pseudogenes.tab
+
+# Plot sample's protein sizes relative to best TrEMBL hits
+module load R/3.5.0
+echo "
+filein  = '$O/annot/$B.faa.diamond-trembl.tsv'
+fileout = '$O/annot/$B.faa.diamond-trembl.pdf'
+data <- read.table(filein, sep='\t', header=FALSE)
+bks <- seq(0, max(data\$V13/data\$V14)+1, by=0.05)
+pdf(fileout, width=10, height=10)
+hist(data\$V13/data\$V14, breaks=bks, col='red',
+ xlim=c(0,2), xlab='query len / hit len', ylab='frequency', main=filein)
+dev.off() 
+fileout <- gsub('.pdf', '.y-lim=500.pdf', fileout)
+pdf(fileout, width=10, height=10)
+hist(data\$V13/data\$V14, breaks=bks, col='purple', ylim=c(0,500),
+ xlim=c(0,2), xlab='query len / hit len', ylab='frequency', main=filein)
+dev.off()
+" | R --slave --vanilla
+module unload R/3.5.0
+pigz -9f $O/annot/$B.faa.diamond-trembl.tsv
+rm -rf $O/annot/$B/$B.{err,ffn,fna,fsa,log,sqn,tbl,tsv,txt}
