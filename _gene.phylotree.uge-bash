@@ -15,17 +15,18 @@ function extraction_method() {
   if [[ "$1" == "product" ]]; then
     read -d '' SCRIPT_CMD <<- 'EOF'
       python "$LAB_HOME"/.bin/extract.record.from.genbank.py -i "$G" \
-			-u product -o "$OUT"/phy/"$GENE"."$B".fa -q "$PROD"
+			-u product -o "$OUT"/phy/"$GENE"."$B".fa -q "$PROD" -y contains
 		EOF
   elif [[ "$1" == "gene" ]]; then
     read -d '' SCRIPT_CMD <<- 'EOF'
-      python "$LAB_HOME"/.bin/extract.nucl.from.GBK.py -i "$G" \
-			-f "$GENE" -t gene -o "$OUT"/phy/"$GENE"."$B".fa
+      python "$LAB_HOME"/.bin/extract.record.from.genbank.py -i "$G" \
+			-u gene -o "$OUT"/phy/"$GENE"."$B".fa -q "$GENE" -y full_exact
 		EOF
   elif [[ "$1" == "rrna" ]]; then
     read -d '' SCRIPT_CMD <<- 'EOF'
       python "$LAB_HOME"/.bin/extract.record.from.genbank.py -i "$G" \
-			-u product -f rRNA -o "$OUT"/phy/"$GENE"."$B".fa -q '16S ribosomal RNA'
+			-u product -o "$OUT"/phy/"$GENE"."$B".fa -q '16S ribosomal RNA' \
+			-y full_exact -f rRNA
 		EOF
   fi
 }
