@@ -42,19 +42,21 @@ else
   OUT=$(readlink -f "$2")
 fi
 [ ! -d "$OUT"/.log ] && mkdir -pv "$OUT"/.log > /dev/null
+LOG_BASE=$(basename $0 .uge-bash)
+LOGFILE="$OUT"/.log/"$LOG_BASE".log.txt
 
 # Log system and user info for debugging
-echo "[START]           $(date)" > "$OUT"/.log/log.txt
-echo "[SYS]             $(uname -nro)" >> "$OUT"/.log/log.txt
-echo "[USER]            $USER" >> "$OUT"/.log/log.txt
-echo "[CWD]             $PWD" >> "$OUT"/.log/log.txt
+echo "[START]           $(date)" > "$LOGFILE"
+echo "[SYS]             $(uname -nro)" >> "$LOGFILE"
+echo "[USER]            $USER" >> "$LOGFILE"
+echo "[CWD]             $PWD" >> "$LOGFILE"
 source /etc/profile.d/modules.sh && module purge
 echo "[MODULES LOADED]  $(module list 2>&1 | \
-  sed 's/Currently Loaded Modulefiles://1')" >> "$OUT"/.log/log.txt
-echo -e "[PATH]            $PATH\n" >> "$OUT"/.log/log.txt
-echo "[I/O]" >> "$OUT"/.log/log.txt
-echo "Input directory:  $IN" | tee -a "$OUT"/.log/log.txt
-echo -e "Output directory: $OUT\n" | tee -a "$OUT"/.log/log.txt
+  sed 's/Currently Loaded Modulefiles://1')" >> "$LOGFILE"
+echo -e "[PATH]            $PATH\n" >> "$LOGFILE"
+echo "[I/O]" >> "$LOGFILE"
+echo "Input directory:  $IN" | tee -a "$LOGFILE"
+echo -e "Output directory: $OUT\n" | tee -a "$LOGFILE"
 
 # Find all input assembly files
 cd $IN
@@ -72,7 +74,7 @@ ASM=( $IN/*.{fa,fas,fsa,fna,fasta} )
 shopt -u nullglob
 echo "Found ${#ASM[@]} genomes..."
 echo -e "[ASSEMBLIES]\n$(echo ${ASM[@]} | tr ' ' '\n')\n" | \
-  tee -a "$OUT"/.log/log.txt
+  tee -a "$LOGFILE"
 if [ ${#ASM[@]} -lt 3 ]; then
   echo 'ERROR: at least 3 genomes are required for batch analysis' >&2
   exit 1
