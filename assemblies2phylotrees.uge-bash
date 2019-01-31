@@ -73,9 +73,8 @@ echo "[I/O]" >> "$LOGFILE"
 echo "Input directory:  $IN" | tee -a "$LOGFILE"
 echo -e "Output directory: $OUT\n" | tee -a "$LOGFILE"
 
-cd $IN
 shopt -s nullglob
-ASM=( *.{fa,fas,fsa,fna,fasta} )
+ASM=( $IN/*.{fa,fas,fsa,fna,fasta} )
 shopt -u nullglob
 [[ "${ASM[@]}" =~ "," ]] && { usage; exit 1; }
 echo -e "[ASSEMBLIES]\n$(echo ${ASM[@]} | tr ' ' '\n')\n" | \
@@ -97,9 +96,9 @@ for A in "${ASM[@]}"; do
     echo "Found $B annotated already; skipping prokka annotation..."
     continue
   fi
-  JID=$(qsub -q all.q -pe smp 1-128 -N ann.$B -o $OUT/.log -e $OUT/.log <<- EOF
+  JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N ann.$B -o $OUT/.log -e $OUT/.log <<- EOF
 	source /etc/profile.d/modules.sh
-	module load perl/5.16.1-MT prokka/1.8 tbl2asn/25.3
+	module load perl/5.16.1-MT prokka/1.13.3
 	prokka --outdir $OUT/phy/$B --prefix $B --addgenes --locustag $B \
 		--mincontiglen 250 --evalue 1e-06 --cpus \$NSLOTS --force $IN/$A
 	mv -f $OUT/phy/$B/$B.gbf $OUT/phy/$B.gbk
@@ -109,42 +108,40 @@ for A in "${ASM[@]}"; do
   check_submit_status "$JID" "$JOB_IDS"
   ((i++))
 done
+echo "${i} assemblies are being annotated before sequence extractions begin" | \
+  tee -a "$LOGFILE"
 sleep 0.5
 shopt -u globstar
-
-# Extract sequence from each annotated file
-if [[ $i -gt 0 ]]; then
-  IDS=$(cat "$JOB_IDS" | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
-    tr -d '\n' | sed -e 's/,$//')
-  JOBS="-hold_jid $IDS"
-else
-  JOBS=''
-fi
+JOBS=$(cat "$JOB_IDS" | cut -f 3 -d ' ' | \
+  sed -e 's/$/,/' | tr -d '\n' | sed -e 's/,$//')
 
 # 16S rRNA encoding gene tree
-JID=$(qsub -q all.q -pe smp 1-128 -N phy.16S -o $OUT/.log -e $OUT/.log $JOBS \
+JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N phy.16S \
+  -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
   -v GENE=16S,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=rrna \
   $LAB_HOME/.job/_gene.phylotree.uge-bash)
 check_submit_status "$JID" "$JOB_IDS"
 
-# Product name instead of gene name tree
+# Product name trees
 declare -A GENE_PROD=(
   [recA]='recombinase A'
-  [secA]='preprotein translocase subunit SecA'
-  [secY]='preprotein translocase subunit SecY'
+  [secA]='protein translocase subunit SecA' #sometimes 'Pre' or 'pre' prefix
+  [secY]='protein translocase subunit SecY' #sometimes 'Pre' or 'pre' prefix
 )
 for key in "${!GENE_PROD[@]}"; do
   val="'${GENE_PROD[$key]}'"
-  JID=$(qsub -q all.q -pe smp 1-128 -N phy."$key" -o $OUT/.log -e $OUT/.log \
-    $JOBS -v PROD="$val",GENE="$key",OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=product \
+  JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N phy."$key" \
+    -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
+    -v PROD="$val",GENE="$key",OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=product \
     $LAB_HOME/.job/_gene.phylotree.uge-bash)
   check_submit_status "$JID" "$JOB_IDS"
 done
 
-# Make trees and %nucl similarity matrices for genes found in GenBank files
+# Gene name trees
 for g in atpD dnaJ glnA groL rpoA rpoB rpoC sodA tuf pheS thrC; do
-  JID=$(qsub -q all.q -pe smp 1-128 -N phy.$g -o $OUT/.log -e $OUT/.log \
-    $JOBS -v GENE=$g,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=gene \
+  JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N phy.$g \
+    -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
+    -v GENE=$g,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=gene \
     $LAB_HOME/.job/_gene.phylotree.uge-bash)
   check_submit_status "$JID" "$JOB_IDS"
 done
