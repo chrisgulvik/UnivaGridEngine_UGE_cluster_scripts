@@ -104,7 +104,7 @@ for A in "${ASM[@]}"; do
   else
     JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N ann.$B -o $OUT/.log -e $OUT/.log <<- EOF
 		source /etc/profile.d/modules.sh
-		module load perl/5.16.1-MT prokka/1.8 tbl2asn/25.3
+		module load perl/5.16.1-MT prokka/1.13.3
 		prokka --outdir $OUT/annot/$B --prefix $B --addgenes --locustag $B \
 			--mincontiglen 250 --evalue 1e-06 --cpus \$NSLOTS --force $IN/$A
 		rm -f "${OUT}/${B}/${B}.{err,ffn,fsa,log,sqn,tbl,txt}"
@@ -136,7 +136,8 @@ for C in "${COMBO[@]}"; do
   D2=$(basename ${C2%.*})
   JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N ani.$D1$D2 \
     -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
-    -v S1=$C1,S2=$C2,O=$OUT $LAB_HOME/.job/_ani.run.uge-bash)
+    -v S1=$C1,S2=$C2,O=$OUT \
+    $LAB_HOME/.job/_ani.run.uge-bash)
   [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
   echo "$JID" >> "$JOB_IDS"
 done
@@ -146,8 +147,9 @@ JOBS=$(cat "$JOB_IDS" | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
   tr -d '\n' | sed -e 's/,$//')
 if [ ${#JOBS} -lt $((`getconf ARG_MAX`-300)) ]; then
   echo "Submitting ANI summary job..."
-  JID=$(qsub -q all.q -q short.q -N ani.sum -o $OUT/.log -e $OUT/.log \
-    -hold_jid ${JOBS:-0000001} -v P=$OUT \
+  JID=$(qsub -q all.q -q short.q -N ani.sum \
+    -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
+    -v P=$OUT \
     $LAB_HOME/.job/_ani.summarize.uge-bash)
   [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
   echo 'All jobs submitted, so you can logout and check back later!'
