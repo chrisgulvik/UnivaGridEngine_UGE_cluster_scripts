@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+
+
+usage() {
+  echo "
+Usage: ${0##*/} InputDirectory [OutputDirectory] [-h|--help]
+  
+Required:
+  <InputDirectory>   Path containing PE Illumina 1.8+ files as *.fastq.gz
+  
+  Sample names are extracted from the first underscore of read files. Hyphens,
+  periods, and commas are automatically discarded from the name to avoid errors.
+  WARNING: If you have HiSeq data where samples are ran on more than one lane, 
+  be sure to concatenate them.
+
+  Sample pairing of sister reads is done by consecutively using filenames sorted
+  with \`ls\`, which flexibly allows for naming other than traditional R1 and R2.
+  Verify that files properly will pair by checking the output order of \`ls\`
+  within the <InputDirectory>.
+
+Optional:
+  -h | --help        Show this help message and exit.
+
+  <OutputDirectory>  Location for the output files, which
+                     includes job logfiles. Output files
+                     will be overwritten if already present.
+                     Default: current working directory.
+  
+Output directory structure:
+  annot/
+      <sampleA>.gbk
+      <sampleA>.faa.diamond-trembl.pdf
+      <sampleB>.gbk
+      <sampleB>.faa.diamond-trembl.pdf
+      <sampleC>.gbk
+      <sampleC>.faa.diamond-trembl.pdf
+  asm/
+      <sampleA>/
+          assembly_graph_with_scaffolds.gfa
+          contigs.fasta
+          {params.txt,spades.log}.gz
+      <sampleB>/
+          assembly_graph_with_scaffolds.gfa
+          contigs.fasta
+          {params.txt,spades.log}.gz
+      <sampleC>/
+          assembly_graph_with_scaffolds.gfa
+          {params.txt,spades.log}.gz
+      <sampleA>.fna
+      <sampleB>.fna
+      <sampleC>.fna
+      {skesa,unicyc}_<sampleA>.fna.gz
+      {skesa,unicyc}_<sampleB>.fna.gz
+      {skesa,unicyc}_<sampleC>.fna.gz
+  qa/
+      Summary.Assemblies.tab
+      Summary.Illumina.CleanedReads-AlnStats.tab
+      Summary.Illumina.CleanedReads-Bases.tab
+      Summary.Illumina.GenomeCoverage.tab
+      Summary.Illumina.Pseudogenes.tab
+  trim_reads/
+      <sampleA>_R1.paired.fq.gz
+      <sampleA>_R2.paired.fq.gz
+      <sampleA>.single.fq.gz
+      <sampleB>_R1.paired.fq.gz
+      <sampleB>_R2.paired.fq.gz
+      <sampleB>.single.fq.gz
+      <sampleC>_R1.paired.fq.gz
+      <sampleC>_R2.paired.fq.gz
+      <sampleC>.single.fq.gz
+  "
+  }
+
+check_submit_status()
+{
+  # 1=job ID number; 2=job IDs logfile
+  if [[ $1 != *submitted* ]]; then
+    echo 'ERROR: improper job submission' >&2
+    exit 1
+  fi
+  echo "$1" >> "$2"
+}
+
+# Requirements
+command -v qsub >/dev/null 2>&1 || { echo 'ERROR: qsub not found' >&2; exit 1; }
+[[ $1 == "--help" || $1 == "-h" ]] && { usage; exit 0; }
+if [[ $# -lt 1  || $# -gt 2 ]]; then
+  echo "ERROR: improper number ("$#") of arguments provided" >&2
+  usage
+  exit 1
+fi
+source $HOME/.bashrc
+if [[ -z "$LAB_HOME" ]]; then
+  echo 'ERROR: $LAB_HOME not set' >&2
+  exit 1
+fi
+
+# I/O handling
+IN=$(readlink -f "$1")
+if [[ -z "$2" ]]; then
+  OUT="${PWD}"
+else
+  OUT=$(readlink -f "$2")
+fi
+[ ! -d "$OUT"/.log ] && mkdir -pv "$OUT"/.log > /dev/null
+LOG_BASE=$(basename $0 .uge-bash)
+LOGFILE="$OUT"/.log/"$LOG_BASE".log.txt
+JOB_IDS="$OUT"/.log/"$LOG_BASE".job_ids.txt
+
+# Log system and user info for debugging
+echo "[START]           $(date)" > "$LOGFILE"
+echo "[SYS]             $(uname -nro)" >> "$LOGFILE"
+echo "[USER]            $USER" >> "$LOGFILE"
+echo "[CWD]             $PWD" >> "$LOGFILE"
+source /etc/profile.d/modules.sh && module purge
+echo "[MODULES LOADED]  $(module list 2>&1 | \
+  sed 's/Currently Loaded Modulefiles://1')" >> "$LOGFILE"
+echo -e "[PATH]            $PATH\n" >> "$LOGFILE"
+echo "[I/O]" >> "$LOGFILE"
+echo "Input directory:  $IN" | tee -a "$LOGFILE"
+echo -e "Output directory: $OUT\n" | tee -a "$LOGFILE"
+
+# Test if even number of sequence files
+shopt -s nullglob
+READS=( $IN/*.fastq.gz )
+shopt -u nullglob
+if [[ $((${#READS[@]} % 2)) -ne 0 ]]; then
+  echo "ERROR: uneven number (${#READS[@]}) of FastQ files" >&2
+  exit 1
+fi
+if [ ${#READS[@]} -lt 1 ]; then
+  echo 'ERROR: no read sets found' >&2
+  exit 1
+fi
+
+# Generate annotated assemblies for all input read pairs
+mkdir -p $OUT/.log
+echo 'Generating annotated assemblies for:'
+for (( i=0; i<${#READS[@]}; i+=2 )); do
+  read1=${READS[i]}
+  read2=${READS[i+1]}
+  b1=$(basename $read1 | cut -d _ -f 1 | sed 's/[-\.,]//g')
+  b2=$(basename $read2 | cut -d _ -f 1 | sed 's/[-\.,]//g')
+  if [ "$b1" != "$b2" ]; then
+    echo "ERROR: improperly paired $b1 $b2" >&2
+    exit 1
+  fi
+  echo "  $b1"
+  JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N TrimAsmAnnot.$b1 \
+    -e $OUT/.log -o $OUT/.log \
+    -v R1=$read1,R2=$read2,B=$b1,O=$OUT \
+    $LAB_HOME/.job/_trim.asm.annot.uge-bash)
+  check_submit_status "$JID" "$JOB_IDS"
+done
+
+# Summarize reads and assemblies
+JOBS=$(cat "$JOB_IDS" | cut -f 3 -d ' ' | \
+  sed -e 's/$/,/' | tr -d '\n' | sed -e 's/,$//')
+a=$OUT/asm
+r=$OUT/trim_reads
+JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N QA.reads.asm \
+  -e $OUT/.log -o $OUT/.log -hold_jid ${JOBS:-0000001} \
+  -v ASM_DIR=$a,TRIM_DIR=$r,O=$OUT \
+  $LAB_HOME/.job/_summarize.FastQ.FastA.uge-bash)
+check_submit_status "$JID" "$JOB_IDS"
