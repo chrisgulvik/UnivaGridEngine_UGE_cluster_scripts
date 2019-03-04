@@ -52,6 +52,12 @@ if [[ -z "$R1" || -z "$R2" || -z "$B" || -z "$O" ]]; then
   exit 1
 fi
 
+# Log system and user info for debugging
+echo "[START]           $(date)" >&2
+echo "[SYS]             $(uname -nro)" >&2
+echo "[USER]            $USER" >&2
+echo -e "[CWD]             $PWD\n" >&2
+
 # Setup dir structure
 JOB_ID=$(basename $0)
 mkdir -p $O/{trim_reads,asm,annot,qa}
@@ -94,35 +100,45 @@ else
   module load java/jdk1.8.0_131 BBMap/35.92
   RAMSIZE_TOT=$(get_GB_free_memory_total)
   PHIX=$LAB_HOME/.lib/PhiX_NC_001422.1.fasta
+  verify_file "$PHIX" 'PhiX genome' '5k'
   bbduk.sh -Xmx"$RAMSIZE_TOT"g threads=$NSLOTS k=31 hdist=1\
    ref="$PHIX" in="$R1" in2="$R2"\
    out=$O/trim_reads/"$B"-noPhiX-R1.fsq out2=$O/trim_reads/"$B"-noPhiX-R2.fsq\
    qin=auto qout=33 overwrite=t
   module unload java/jdk1.8.0_131 BBMap/35.92
+  for suff in R1.fsq R2.fsq ; do
+    verify_file "${O}/trim_reads/${B}-noPhiX-${suff}" 'PhiX cleaned read' '25M'
+  done
   TOT_READS=$(grep '^Input: ' $O/.log/TrimAsmAnnot.${B}.e${JOB_ID} \
    | awk '{print $2}')
   TOT_BASES=$(grep '^Input: ' $O/.log/TrimAsmAnnot.${B}.e${JOB_ID} \
    | awk '{print $4}')
+  if [[ -z "${TOT_READS}" || -z "${TOT_BASES}" ]]; then
+    'ERROR: unable to parse input counts from bbduk log' >&2
+    exit 1
+  fi
   PHIX_READS=$(grep '^Contaminants: ' $O/.log/TrimAsmAnnot.${B}.e${JOB_ID} \
    | awk '{print $2}' | sed 's/,//g')
   PHIX_BASES=$(grep '^Contaminants: ' $O/.log/TrimAsmAnnot.${B}.e${JOB_ID} \
    | awk '{print $5}' | sed 's/,//g')
   echo "INFO: $TOT_BASES bp and $TOT_READS reads provided as raw input" >&2
-  echo "INFO: $PHIX_BASES bp of PhiX were detected and removed in $PHIX_READS reads" >&2
+  echo "INFO: ${PHIX_BASES:-0} bp of PhiX were detected and removed in ${PHIX_READS:-0} reads" >&2
   echo -e "${B}\t${TOT_BASES} bp Raw\t${TOT_READS} reads Raw" \
    > $O/trim_reads/"$B".raw.tsv
-  echo -e "${B}\t${PHIX_BASES} bp PhiX\t${PHIX_READS} reads PhiX" \
+  echo -e "${B}\t${PHIX_BASES:-0} bp PhiX\t${PHIX_READS:-0} reads PhiX" \
    > $O/trim_reads/"$B".phix.tsv
 
   # Adapter clip and quality trim
   module load java/jdk1.8.0_131 trimmomatic/0.35
-  ADAPTERS=$LAB_HOME/.lib/adapters_Nextera_NEB_TruSeq_NuGEN.fas
+  ADAPTERS=$LAB_HOME/.lib/adapters_Nextera_NEB_TruSeq_NuGEN_ThruPLEX.fas
+  verify_file "$ADAPTERS" 'adapters' '10k'
   trimmomatic PE -phred33 -threads $NSLOTS\
    $O/trim_reads/"$B"-noPhiX-R1.fsq $O/trim_reads/"$B"-noPhiX-R2.fsq\
    $O/trim_reads/"$B"_R1.paired.fq $O/trim_reads/"$B"_R1.unpaired.fq\
    $O/trim_reads/"$B"_R2.paired.fq $O/trim_reads/"$B"_R2.unpaired.fq\
    ILLUMINACLIP:$ADAPTERS:2:20:10:8:TRUE\
    SLIDINGWINDOW:6:30 LEADING:10 TRAILING:10 MINLEN:50
+  module unload java/jdk1.8.0_131 trimmomatic/0.35
   rm -f $O/trim_reads/"$B"-noPhiX-R1.fsq $O/trim_reads/"$B"-noPhiX-R2.fsq
   TRIMMO_DISCARD=$(grep '^Input Read Pairs: ' $O/.log/TrimAsmAnnot.${B}.e${JOB_ID} \
    | grep ' Dropped: ' | awk '{print $20}')
@@ -131,6 +147,10 @@ else
    $O/trim_reads/"$B"_R1.unpaired.fq)
   CNT_BROKEN_R2=$(awk '{lines++} END{print lines/4}' \
    $O/trim_reads/"$B"_R2.unpaired.fq)
+  if [[ -z "${TRIMMO_DISCARD}" || -z "${CNT_BROKEN_R1}" || -z "${CNT_BROKEN_R2}" ]]; then
+    'ERROR: unable to parse discarded read counts from trimmomatic log' >&2
+    exit 1
+  fi
   CNT_BROKEN=$((${CNT_BROKEN_R1} + ${CNT_BROKEN_R2}))
   echo "INFO: $CNT_BROKEN_R1 forward reads lacked a high quality R2 sister read" >&2
   echo "INFO: $CNT_BROKEN_R2 reverse reads lacked a high quality R1 sister read" >&2
@@ -140,7 +160,6 @@ else
   cat $O/trim_reads/"$B"_R1.unpaired.fq $O/trim_reads/"$B"_R2.unpaired.fq\
    > $O/trim_reads/"$B".single.fq
   rm -f $O/trim_reads/"$B"_R1.unpaired.fq $O/trim_reads/"$B"_R2.unpaired.fq
-  module unload java/jdk1.8.0_131 trimmomatic/0.35
   for suff in _R1.paired.fq _R2.paired.fq ; do
     verify_file "$O/trim_reads/${B}${suff}" 'cleaned read' '25M'
   done
@@ -163,14 +182,11 @@ else
     [ -s  $O/trim_reads/"$B".assembled.fastq ]; then
       CNT_READS_OVERLAPPED=$(awk '{lines++} END{print lines/4}' \
        $O/trim_reads/"$B".assembled.fastq)
-      echo "INFO: $CNT_READS_OVERLAPPED pairs overlapped into singleton reads" >&2
       cat $O/trim_reads/"$B".assembled.fastq >> $O/trim_reads/"$B".single.fq
       rm $O/trim_reads/"$B".{assembled,discarded}.fastq
-    else
-      CNT_READS_OVERLAPPED=0
-      echo "INFO: 0 pairs overlapped into singleton reads" >&2
     fi
-    echo -e "${B}\t${CNT_READS_OVERLAPPED} reads Overlapped" \
+    echo "INFO: ${CNT_READS_OVERLAPPED:-0} pairs overlapped into singleton reads" >&2
+    echo -e "${B}\t${CNT_READS_OVERLAPPED:-0} reads Overlapped" \
      > $O/trim_reads/"$B".overlap.tsv
   fi
 
@@ -194,28 +210,28 @@ module unload Skesa/2.3.0
 verify_file "$O/asm/skesa_$B" 'SKESA output assembly' '2M'
 
 # Assemble with SPAdes
-spades_continue=''
 failed=0
+module load SPAdes/3.12.0
 while [[ ! -f $O/asm/"$B"/contigs.fasta ]] && [ $failed -lt 2 ]; do
+  RAMSIZE_TOT=$(get_GB_free_memory_total)
   if [ $failed -gt 0 ]; then
     echo "ERROR: assembly file not produced by SPAdes for $B" >&2
     mv -f $O/asm/"$B"/spades.log \
      $O/asm/"$B"/"$failed"of3-asm-attempt-failed.spades.log 2> /dev/null
     echo "INFO: SPAdes failure $failed; retrying assembly for $B" >&2
     # SPAdes v3.12.0+ no longer allows --continue with other opts
-    spades_continue='--restart-from last'
+    spades.py --restart-from last -o $O/asm/"$B" -t $NSLOTS >&2
+  else
+    spades.py --pe1-1 $O/trim_reads/"$B"_R1.paired.fq.gz\
+     --pe1-2 $O/trim_reads/"$B"_R2.paired.fq.gz\
+     --pe1-s $O/trim_reads/"$B".single.fq.gz\
+     --tmp-dir "$TMP_DIR" --memory "$RAMSIZE_TOT"\
+     -o $O/asm/"$B" --phred-offset 33\
+     -t $NSLOTS --only-assembler >&2
   fi
-  module load SPAdes/3.12.0
-  RAMSIZE_TOT=$(get_GB_free_memory_total)
-  spades.py --pe1-1 $O/trim_reads/"$B"_R1.paired.fq.gz\
-   --pe1-2 $O/trim_reads/"$B"_R2.paired.fq.gz\
-   --pe1-s $O/trim_reads/"$B".single.fq.gz\
-   --tmp-dir "$TMP_DIR" --memory "$RAMSIZE_TOT"\
-   -o $O/asm/"$B" --phred-offset 33\
-   -t $NSLOTS --only-assembler $spades_continue >&2
-  module unload SPAdes/3.12.0
   ((failed++))
 done
+module unload SPAdes/3.12.0
 verify_file "${O}/asm/${B}/contigs.fasta" 'SPAdes output assembly' '2M'
 bash $LAB_HOME/.bin/prune.SPAdes.assembly.dirs.bash $O/asm/"$B"
 
@@ -232,22 +248,26 @@ source deactivate
 rm $O/asm/skesa_"$B"
 
 # Assemble with Unicycler and cleanup
-module load ncbi-blast+/2.6.0 SPAdes/3.12.0 bowtie2/2.3.3.1 \
- samtools/1.8 java/jdk1.8.0_131 pilon/1.22 bcftools/1.7 \
- ALE/20130717 gcc/5.4
-source activate py3unicycler
-unicycler -1 $O/trim_reads/"$B"_R1.paired.fq.gz \
- -2 $O/trim_reads/"$B"_R2.paired.fq.gz \
- -s $O/trim_reads/"$B".single.fq.gz \
- --out $O/asm/unicyc_"$B" \
- --spades_tmp_dir "$TMP_DIR" --min_polish_size 1000 \
- -t $NSLOTS --min_fasta_length 1000 --keep 0 --verbosity 2 >&2
-source deactivate
-module unload ncbi-blast+/2.6.0 SPAdes/3.12.0 bowtie2/2.3.3.1 \
- samtools/1.8 java/jdk1.8.0_131 pilon/1.22 bcftools/1.7 \
- ALE/20130717 gcc/5.4
-mv -f $O/asm/unicyc_"$B"/assembly.fasta $O/asm/unicyc_"$B".fna
-pigz -9f $O/asm/unicyc_"$B"/{assembly.gfa,unicycler.log}
+if [[ $(find $O/asm/unicyc_"$B".fna -type f -size +2M 2> /dev/null) ]]; then
+  echo "INFO: found unicycler assembly for $B" >&2
+else
+  module load ncbi-blast+/2.6.0 SPAdes/3.12.0 bowtie2/2.3.3.1 \
+   samtools/1.8 java/jdk1.8.0_131 pilon/1.22 bcftools/1.7 \
+   ALE/20130717 gcc/5.4
+  source activate py3unicycler
+  unicycler -1 $O/trim_reads/"$B"_R1.paired.fq.gz \
+   -2 $O/trim_reads/"$B"_R2.paired.fq.gz \
+   -s $O/trim_reads/"$B".single.fq.gz \
+   --out $O/asm/unicyc_"$B" \
+   --spades_tmp_dir "$TMP_DIR" --min_polish_size 1000 \
+   -t $NSLOTS --min_fasta_length 1000 --keep 0 --verbosity 2 >&2
+  source deactivate
+  module unload ncbi-blast+/2.6.0 SPAdes/3.12.0 bowtie2/2.3.3.1 \
+   samtools/1.8 java/jdk1.8.0_131 pilon/1.22 bcftools/1.7 \
+   ALE/20130717 gcc/5.4
+  mv -f $O/asm/unicyc_"$B"/assembly.fasta $O/asm/unicyc_"$B".fna
+  pigz -9f $O/asm/unicyc_"$B"/{assembly.gfa,unicycler.log}
+fi
 
 # Verify sufficient bacterial genome size after filtering assemblies
 verify_file "$O/asm/$B.uncorrected.fna" 'filtered SPAdes assembly' '2M'
@@ -256,6 +276,8 @@ verify_file "$O/asm/unicyc_$B.fna" 'Unicycler output assembly' '2M'
 
 # Correct cleaned SPAdes contigs with cleaned reads
 module load bwa/0.7.17 samtools/1.8 java/jdk1.8.0_131 pilon/1.22
+echo -n '' > $O/asm/"$B".InDels-corrected.cnt.txt
+echo -n '' > $O/asm/"$B".SNPs-corrected.cnt.txt
 for _ in {1..3}; do
   bwa index $O/asm/"$B".uncorrected.fna
   RAMSIZE_PER_THREAD=$(get_MB_free_memory_per_thread "$NSLOTS")
@@ -267,14 +289,14 @@ for _ in {1..3}; do
   verify_file "$O/asm/$B.bam" 'binary sequence alignment map' '25M'
   samtools index $O/asm/"$B".bam
   pilon --genome $O/asm/"$B".uncorrected.fna --frags $O/asm/"$B".bam\
-   --output "$B" --outdir $O/asm --changes --tracks --verbose\
+   --output "$B" --outdir $O/asm --changes \
    --fix snps,indels --mindepth 0.50 --threads $NSLOTS
   verify_file "$O/asm/$B.uncorrected.fna" 'polished assembly' '2M'
   grep -c '-' $O/asm/"$B".changes >> $O/asm/"$B".InDels-corrected.cnt.txt
   grep -vc '-' $O/asm/"$B".changes >> $O/asm/"$B".SNPs-corrected.cnt.txt
-  rm -fv $O/asm/"$B".{changes,uncorrected.fna}
-  rm -fv $O/asm/"$B"{*.wig,Pilon.bed}
-  mv -fv $O/asm/"$B".fasta $O/asm/"$B".uncorrected.fna
+  rm -f $O/asm/"$B".{changes,uncorrected.fna}
+  rm -f $O/asm/"$B"Pilon.bed
+  mv -f $O/asm/"$B".fasta $O/asm/"$B".uncorrected.fna
   sed -i 's/_pilon//1' $O/asm/"$B".uncorrected.fna
 done
 module unload bwa/0.7.17 samtools/1.8 java/jdk1.8.0_131 pilon/1.22
@@ -298,9 +320,10 @@ prokka --outdir $O/annot/"$B" --prefix "$B"\
 module unload perl/5.16.1-MT prokka/1.13.3
 verify_file "$O/annot/$B/$B.faa" 'annotated proteome' '100k'
 verify_file "$O/annot/$B/$B.gbk" 'annotated assembly' '3M'
+rm -f $O/annot/"$B"/"$B".{err,ffn,fna,fsa,log,sqn,tbl,tsv,txt}
 mv -f $O/annot/$B/$B.gbk $O/annot/$B.gbk
 
-# MLST for each assembly because Torsten made it so simple
+# MLST for each assembly
 module load mlst/2.9
 mlst --threads $NSLOTS $O/asm/"$B".fna \
  $O/asm/skesa_"$B".fna $O/asm/unicyc_"$B".fna \
@@ -313,9 +336,9 @@ module load kraken/1.0.0
 kraken --threads $NSLOTS --fastq-input --gzip-compressed \
  $O/trim_reads/"$B"_R1.paired.fq.gz $O/trim_reads/"$B"_R2.paired.fq.gz \
  $O/trim_reads/"$B".single.fq.gz | kraken-report \
- > $O/trim_reads/"$B"_kraken.tab
+ > $O/trim_reads/"$B"_kraken.tab 2>&1 | tr '^M' '\n' 1>&2
 module unload kraken/1.0.0
-bash $LAB_HOME/.bin/summarize_kraken.sh $O/trim_reads/"$B"_kraken.tab >> \
+bash $LAB_HOME/.bin/summarize_kraken.sh $O/trim_reads/"$B"_kraken.tab > \
  $O/trim_reads/"$B".taxonomy-reads.tab
 pigz -9f $O/trim_reads/"$B"_kraken.tab
 
@@ -326,7 +349,7 @@ kraken2 --threads $NSLOTS --gzip-compressed \
  $O/trim_reads/"$B"_R1.paired.fq.gz $O/trim_reads/"$B"_R2.paired.fq.gz \
  $O/trim_reads/"$B".single.fq.gz
 module unload kraken/2.0.0
-bash $LAB_HOME/.bin/summarize_kraken.sh $O/trim_reads/"$B"_kraken2.tab >> \
+bash $LAB_HOME/.bin/summarize_kraken.sh $O/trim_reads/"$B"_kraken2.tab > \
  $O/trim_reads/"$B".taxonomy2-reads.tab
 pigz -9f $O/trim_reads/"$B"_kraken2.tab
 
