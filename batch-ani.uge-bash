@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+
+
+function usage() { 
+  echo "
+Usage: ${0##*/} InputDirectory [OutputDirectory] [-h|--help]
+
+Required:
+  <InputDirectory>   All FastA and GenBank formatted files ending in:
+                       {fa,fas,fsa,fna,fasta} and {gb,gbk,gbf,gbff}
+                       with optional .gz compression will be analyzed.
+                     Commas are forbidden in filenames.
+
+                     Only files that exceed 1 MB in size within <InDir>
+                     will be used for ANI comparisons.
+
+Optional:
+  -h | --help        Show this help message and exit.
+
+  <OutputDirectory>  Location for the output files. Pre-computed pairwise
+                     data will be skipped. Group output summary data
+                     files will be overwritten.
+                     Default: current working directory.
+
+  "
+  }
+
+# Requirements
+command -v qsub >/dev/null 2>&1 || { echo 'ERROR: qsub not found' >&2; exit 1; }
+[[ $1 == "--help" || $1 == "-h" ]] && { usage; exit 0; }
+if [[ $# -lt 1  || $# -gt 2 ]]; then
+  echo "ERROR: improper number ("$#") of arguments provided" >&2
+  usage
+  exit 1
+fi
+source $HOME/.bashrc
+if [[ -z "$LAB_HOME" ]]; then
+  echo 'ERROR: $LAB_HOME not set' >&2
+  exit 1
+fi
+
+# I/O handling
+IN=$(readlink -f "$1")
+if [[ -z "$2" ]]; then
+  OUT="${PWD}"
+else
+  OUT=$(readlink -f "$2")
+fi
+[ ! -d "$OUT"/.log ] && mkdir -pv "$OUT"/.log > /dev/null
+LOG_BASE=$(basename $0 .uge-bash)
+LOGFILE="$OUT"/.log/"$LOG_BASE".log.txt
+JOB_IDS="$OUT"/.log/"$LOG_BASE".job_ids.txt
+
+# Log system and user info for debugging
+echo "[START]           $(date)" > "$LOGFILE"
+echo "[SYS]             $(uname -nro)" >> "$LOGFILE"
+echo "[USER]            $USER" >> "$LOGFILE"
+echo "[CWD]             $PWD" >> "$LOGFILE"
+source /etc/profile.d/modules.sh && module purge
+echo "[MODULES LOADED]  $(module list 2>&1 | \
+  sed 's/Currently Loaded Modulefiles://1')" >> "$LOGFILE"
+echo -e "[PATH]            $PATH\n" >> "$LOGFILE"
+echo "[I/O]" >> "$LOGFILE"
+echo "Input directory:  $IN" | tee -a "$LOGFILE"
+echo -e "Output directory: $OUT\n" | tee -a "$LOGFILE"
+
+if [[ $(find . -maxdepth 1 -type f -regextype posix-extended \
+  -regex ".*[[:space:]].*\.(fa|fas|fsa|fna|fasta|gb,gbk,gbf,gbff)($|\.gz$)" \
+  | wc -l) -gt 0 ]]; then
+  echo 'ERROR: whitespace within input filenames are not allowed' >&2
+  echo 'Offending files are:' >&2
+  find . -maxdepth 1 -type f -regextype posix-extended \
+   -regex ".*[[:space:]].*\.(fa|fas|fsa|fna|fasta|gb,gbk,gbf,gbff)($|\.gz$)" \
+   -printf '%p\t%s bytes\n' >&2
+  exit 1
+fi
+shopt -s nullglob
+ASM=( "${IN}"/*.{fa,fas,fsa,fna,fasta,gb,gbk,gbf,gbff}{'',.gz} )
+shopt -u nullglob
+[[ "${ASM[@]}" =~ "," ]] && { usage; exit 1; }
+echo -e "[ASSEMBLIES]\n$(echo ${ASM[@]} | tr ' ' '\n')\n" | \
+  tee -a "$LOGFILE"
+
+if [ ${#ASM[@]} -lt 3 ]; then
+  echo 'ERROR: at least 3 genomes are required for batch analysis' >&2
+  exit 1
+fi
+
+FNA=()
+for A in "${ASM[@]}"; do
+  if [[ $(find -L "$A" -type f -size +1M 2>/dev/null) ]]; then
+    FNA+=("$A")
+  else
+    echo "INFO: $A not >1 MB so it was not included in the analysis" >&2
+  fi
+done
+
+FNA_str=$(printf ",%s" "${FNA[@]}" | sed 's/^,//1')
+export FNA_str
+readarray -t COMBO < <(python - <<-EOF
+	import itertools, os
+	a = os.getenv('FNA_str').split(',')
+	l = list(itertools.combinations(a, 2))
+	print('\n'.join('{},{}'.format(j, k) for j, k in l))
+EOF
+)
+
+echo -n '' > "$JOB_IDS"
+echo "Submitting ${#COMBO[@]} bidirectional ANI query jobs..."
+for C in "${COMBO[@]}"; do
+  C1=${C%%,*}
+  C2=${C##*,}
+  D1=$(basename ${C1%.gz} | sed 's/\.[^.]*$//1' | sed 's/[^[:alpha:]]//g')
+  D2=$(basename ${C2%.gz} | sed 's/\.[^.]*$//1' | sed 's/[^[:alpha:]]//g')
+  JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N ani.$D1$D2 \
+    -o $OUT/.log -e $OUT/.log \
+    -v S1=$C1,S2=$C2,O=$OUT \
+    $LAB_HOME/.job/_ani.run.uge-bash)
+  [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
+  echo "$JID" >> "$JOB_IDS"
+done
+sleep 0.5
+
+JOBS=$(cat "$JOB_IDS" | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
+  tr -d '\n' | sed -e 's/,$//')
+if [ ${#JOBS} -lt $((`getconf ARG_MAX`-300)) ]; then
+  echo "Submitting ANI summary job..."
+  JID=$(qsub -q all.q -q short.q -N ani.sum \
+    -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
+    -v P=$OUT \
+    $LAB_HOME/.job/_ani.summarize.uge-bash)
+  [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
+  echo 'All jobs submitted, so you can logout and check back later!'
+else
+  echo "ANI summary job skipped due to high sample number"
+  echo "\$JOBS is ${#JOBS} char long which exceeds ARG_MAX"
+fi
