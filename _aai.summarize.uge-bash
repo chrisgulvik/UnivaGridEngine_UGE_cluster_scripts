@@ -24,6 +24,7 @@ done
 
 # Summarize AAI values
 echo -n '' > "$P"/AAI.Summary.tab
+echo -n '' > "$P"/Num_Proteins_Per_Proteome.tmp
 for f in "${STATS[@]}"; do
   PAIR=$(basename $f .stats.tab | sed 's/aai\.//1')
   S1=${PAIR##*,}
@@ -35,29 +36,32 @@ for f in "${STATS[@]}"; do
   STDEV=$(grep ',' $f | cut -f 4 | sed 's/%//1')
 
   # unidirectional values
-  P1=$(sed -n '3p' $f | cut -f 2 | cut -d \/ -f 1)
-  M1=$(sed -n '3p' $f | cut -f 3 | sed 's/%//1')
-  D1=$(sed -n '3p' $f | cut -f 4 | sed 's/%//1')
+  P1=$(grep -v -e ',' -e 'StDev' $f | sed -n 1p | cut -f 2 | cut -d \/ -f 1)
+  M1=$(grep -v -e ',' -e 'StDev' $f | sed -n 1p | cut -f 3 | sed 's/%//1')
+  D1=$(grep -v -e ',' -e 'StDev' $f | sed -n 1p | cut -f 4 | sed 's/%//1')
 
-  P2=$(sed -n '4p' $f | cut -f 2 | cut -d \/ -f 1)
-  M2=$(sed -n '4p' $f | cut -f 3 | sed 's/%//1')
-  D2=$(sed -n '4p' $f | cut -f 4 | sed 's/%//1')
+  P2=$(grep -v -e ',' -e 'StDev' $f | sed -n 2p | cut -f 2 | cut -d \/ -f 1)
+  M2=$(grep -v -e ',' -e 'StDev' $f | sed -n 2p | cut -f 3 | sed 's/%//1')
+  D2=$(grep -v -e ',' -e 'StDev' $f | sed -n 2p | cut -f 4 | sed 's/%//1')
 
   echo -e "$S1\t$S2\t$PROT\t$MEAN\t$STDEV\t$P1\t$M1\t$D1\t$P2\t$M2\t$D2" >> "$P"/AAI.Summary.tab
+
+  # number of proteins in each input sample
+  TotalInputProteins_S1=$(grep -v -e ',' -e 'StDev' $f | sed -n 1p | cut -f 2 | cut -d \/ -f 2)
+  TotalInputProteins_S2=$(grep -v -e ',' -e 'StDev' $f | sed -n 2p | cut -f 2 | cut -d \/ -f 2)
+  echo -e "$S1\t$TotalInputProteins_S1" >> "$P"/Num_Proteins_Per_Proteome.tmp
+  echo -e "$S2\t$TotalInputProteins_S2" >> "$P"/Num_Proteins_Per_Proteome.tmp
 done
 A='Sample\tSample\tProteins_Used_for_Bidirectional_Calc[#]\tBidirectional_AAI[%]\tBidirectional_StDev[%]'
 B='\tProteins_Used_for_Unidirectional_Calc[#]\tUnidirectional_AAI[%]\tUnidirectional_StDev[%]'
 sed -i "1i ${A}${B}${B}" "$P"/AAI.Summary.tab
 
-# Calculate number of proteins in each
-echo -n '' > "$P"/Num_Proteins_Per_Proteome.tab
-shopt -s globstar
-for i in "$P"/**/*.faa; do
-  b=$(basename $i .faa)
-  nr=$(grep '^>' $i | wc -l)
-  echo -e "$b\t$nr" >> "$P"/Num_Proteins_Per_Proteome.tab
-done
-shopt -u globstar
-sed -i '1i Proteome\tProteins_Predicted_from_Genome[#]' \
-  "$P"/Num_Proteins_Per_Proteome.tab
-sed -i 's/\.faa//g' "$P"/Num_Proteins_Per_Proteome.tab
+awk '!seen[$0]++' "$P"/Num_Proteins_Per_Proteome.tmp \
+ | sed '1i Proteome\tProteins_Predicted_from_Genome[#]' \
+ > "$P"/Num_Proteins_Per_Proteome.tab
+rm "$P"/Num_Proteins_Per_Proteome.tmp
+
+# Cleanup empty logfiles
+find "$P"/.log -maxdepth 1 -type f -regextype posix-extended \
+ -regex ".*/aai.*.(e|o|pe|po)[0-9]{7}" \
+ -size 0 -print0 2> /dev/null | xargs -0 rm --
