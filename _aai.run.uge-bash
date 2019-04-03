@@ -6,13 +6,9 @@
 [[ -z "$S2" ]] && { echo 'ERROR: $S2 not set' >&2; exit 1; }
 [[ -z "$O" ]] && { echo 'ERROR: $O not set' >&2; exit 1; }
 
-# Optional non-default parameters for AAI comparison
-XOPTS=''
-[[ ! -z "${ALN_FRAC}" ]] && { XOPTS="--fraction $ALN_FRAC "; }
-[[ ! -z "${PERC_ID}" ]] && { XOPTS+="--identity $PERC_ID "; }
-
+# Verify input files exist and not empty
 for f in $S1 $S2; do
-  if [ ! -f "$f" ]; then
+  if [ ! -e "$f" ]; then
     echo "ERROR: $f nonexistent" >&2
     exit 1
   fi
@@ -22,9 +18,15 @@ for f in $S1 $S2; do
   fi
 done
 
-B1=$(basename $S1 .faa)
-B2=$(basename $S2 .faa)
+# When sample (base)name variable not given, grab from filename
+if [[ -z "${B1}" ]]; then
+  B1=$(basename ${S1%.gz} | sed 's/\.[^.]*$//1' | sed 's/_genomic//1')
+fi
+if [[ -z "${B2}" ]]; then
+  B2=$(basename ${S2%.gz} | sed 's/\.[^.]*$//1' | sed 's/_genomic//1')
+fi
 
+# Skip comparison if precomputed value exists
 if [ -s "$O/AAI--$B1,$B2/aai.$B1,$B2.stats.tab" ]; then
   echo "INFO: found precomputed $O/AAI--$B1,$B2/aai.$B1,$B2.stats.tab" >&2
   AAI=$(grep ',' "$O/AAI--$B1,$B2/aai.$B1,$B2.stats.tab" | cut -f 3 | sed 's/%//1')
@@ -39,13 +41,22 @@ if [[ ! -z $AAI ]]; then
   fi
 fi
 
+# Optional non-default parameters for AAI comparison
+XOPTS=''
+[[ ! -z "${ALIGNER}" ]] && { XOPTS="--aligner $ALIGNER "; }
+[[ ! -z "${ALN_FRAC}" ]] && { XOPTS="--fraction $ALN_FRAC "; }
+[[ ! -z "${PERC_ID}" ]] && { XOPTS+="--identity $PERC_ID "; }
+
 source /etc/profile.d/modules.sh
-module load ncbi-blast+/2.6.0
+if [[ "${ALIGNER}" == 'diamond' ]]; then
+  module load diamond/0.9.22
+else
+  module load ncbi-blast+/2.6.0
+fi
 source $HOME/.bashrc
 export PATH="$LAB_HOME/.anaconda2/bin:$PATH"
 sleep 0.5
 source activate bpy2
-command -v blastp > /dev/null 2>&1 || { echo 'ERROR: blastp not found' >&2; exit 1; }
-AAI.py -1 $S1 -2 $S2 -c $NSLOTS -o "$O/AAI--$B1,$B2" $XOPTS
-source deactivate
-module unload ncbi-blast+/2.6.0
+command -v blastp diamond > /dev/null 2>&1 || { echo 'ERROR: aligner not found' >&2; exit 1; }
+AAIb+.py -1 $S1 -2 $S2 --name1 $B1 --name2 $B2 -c $NSLOTS \
+ -o "$O/AAI--$B1,$B2" $XOPTS
