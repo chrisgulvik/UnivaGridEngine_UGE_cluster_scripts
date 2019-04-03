@@ -6,6 +6,7 @@
 [[ -z "$S2" ]] && { echo 'ERROR: $S2 not set' >&2; exit 1; }
 [[ -z "$O" ]] && { echo 'ERROR: $O not set' >&2; exit 1; }
 
+# Verify input files exist and not empty
 for f in $S1 $S2; do
   if [ ! -e "$f" ]; then
     echo "ERROR: $f nonexistent" >&2
@@ -17,9 +18,15 @@ for f in $S1 $S2; do
   fi
 done
 
-B1=$(basename ${S1%.gz} | sed 's/\.[^.]*$//1')
-B2=$(basename ${S2%.gz} | sed 's/\.[^.]*$//1')
+# When sample (base)name variable not given, grab from filename
+if [[ -z "${B1}" ]]; then
+  B1=$(basename ${S1%.gz} | sed 's/\.[^.]*$//1' | sed 's/_genomic//1')
+fi
+if [[ -z "${B2}" ]]; then
+  B2=$(basename ${S2%.gz} | sed 's/\.[^.]*$//1' | sed 's/_genomic//1')
+fi
 
+# Skip comparison if precomputed value exists
 if [ -s "$O/ANI--$B1,$B2/ani.$B1,$B2.stats.tab" ]; then
   echo "INFO: found precomputed $O/ANI--$B1,$B2/ani.$B1,$B2.stats.tab" >&2
   ANI=$(grep ',' "$O/ANI--$B1,$B2/ani.$B1,$B2.stats.tab" | cut -f 3 | sed 's/%//1')
@@ -41,6 +48,5 @@ export PATH="$LAB_HOME/.anaconda2/bin:$PATH"
 sleep 0.5
 source activate bpy2
 command -v blastn > /dev/null 2>&1 || { echo 'ERROR: blastn not found' >&2; exit 1; }
-ANIb+.py -1 $S1 -2 $S2 -c $NSLOTS -o "$O/ANI--$B1,$B2"
-source deactivate
-module unload ncbi-blast+/2.6.0
+ANIb+.py -1 $S1 -2 $S2 --name1 $B1 --name2 $B2 -c $NSLOTS \
+ -o "$O/ANI--$B1,$B2" $XOPTS
