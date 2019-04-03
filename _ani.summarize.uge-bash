@@ -35,13 +35,13 @@ for f in "${STATS[@]}"; do
   STDEV=$(grep ',' $f | cut -f 4 | sed 's/%//1')
 
   # unidirectional values
-  P1=$(sed -n '3p' $f | cut -f 2 | cut -d \/ -f 1)
-  M1=$(sed -n '3p' $f | cut -f 3 | sed 's/%//1')
-  D1=$(sed -n '3p' $f | cut -f 4 | sed 's/%//1')
+  P1=$(grep -v -e ',' -e 'StDev' $f | sed -n 1p | cut -f 2 | cut -d \/ -f 1)
+  M1=$(grep -v -e ',' -e 'StDev' $f | sed -n 1p | cut -f 3 | sed 's/%//1')
+  D1=$(grep -v -e ',' -e 'StDev' $f | sed -n 1p | cut -f 4 | sed 's/%//1')
 
-  P2=$(sed -n '4p' $f | cut -f 2 | cut -d \/ -f 1)
-  M2=$(sed -n '4p' $f | cut -f 3 | sed 's/%//1')
-  D2=$(sed -n '4p' $f | cut -f 4 | sed 's/%//1')
+  P2=$(grep -v -e ',' -e 'StDev' $f | sed -n 2p | cut -f 2 | cut -d \/ -f 1)
+  M2=$(grep -v -e ',' -e 'StDev' $f | sed -n 2p | cut -f 3 | sed 's/%//1')
+  D2=$(grep -v -e ',' -e 'StDev' $f | sed -n 2p | cut -f 4 | sed 's/%//1')
 
   echo -e "$S1\t$S2\t$PROT\t$MEAN\t$STDEV\t$P1\t$M1\t$D1\t$P2\t$M2\t$D2" >> "$P"/ANI.Summary.tab
 done
@@ -49,5 +49,7 @@ A='Sample\tSample\tProteins_Used_for_Bidirectional_Calc[#]\tBidirectional_ANI[%]
 B='\tProteins_Used_for_Unidirectional_Calc[#]\tUnidirectional_ANI[%]\tUnidirectional_StDev[%]'
 sed -i "1i ${A}${B}${B}" "$P"/ANI.Summary.tab
 
-# Cleanup
-rm -f "$P"/*/*.{err,ffn,fna,fsa,sqn,tbl,txt}
+# Cleanup empty logfiles
+find "$P"/.log -maxdepth 1 -type f -regextype posix-extended \
+ -regex ".*/ani.*.(e|o|pe|po)[0-9]{7}" \
+ -size 0 -print0 2> /dev/null | xargs -0 rm --
