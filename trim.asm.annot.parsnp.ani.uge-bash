@@ -122,7 +122,6 @@ else
   OUT=$(readlink -f "$2")
 fi
 [ ! -d "$OUT"/.log ] && mkdir -pv "$OUT"/.log > /dev/null
-[ ! -d "$OUT"/phy ] && mkdir -pv "$OUT"/phy > /dev/null
 LOG_BASE=$(basename $0 .uge-bash)
 LOGFILE="$OUT"/.log/"$LOG_BASE".log.txt
 JOB_IDS="$OUT"/.log/"$LOG_BASE".job_ids.txt
@@ -166,7 +165,7 @@ for (( i=0; i<${#READS[@]}; i+=2 )); do
     exit 1
   fi
   echo "  $b1"
-  JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N TAA.$b1 \
+  JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N TrimAsmAnnot.$b1 \
     -e $OUT/.log -o $OUT/.log \
     -v R1=$read1,R2=$read2,B=$b1,O=$OUT \
     $LAB_HOME/.job/_trim.asm.annot.uge-bash)
