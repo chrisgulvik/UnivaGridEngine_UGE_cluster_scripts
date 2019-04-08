@@ -211,7 +211,7 @@ verify_file "$O/asm/skesa_$B" 'SKESA output assembly' '2M'
 
 # Assemble with SPAdes
 failed=0
-module load SPAdes/3.12.0
+module load SPAdes/3.13.0
 while [[ ! -f $O/asm/"$B"/contigs.fasta ]] && [ $failed -lt 2 ]; do
   RAMSIZE_TOT=$(get_GB_free_memory_total)
   if [ $failed -gt 0 ]; then
@@ -219,7 +219,6 @@ while [[ ! -f $O/asm/"$B"/contigs.fasta ]] && [ $failed -lt 2 ]; do
     mv -f $O/asm/"$B"/spades.log \
      $O/asm/"$B"/"$failed"of3-asm-attempt-failed.spades.log 2> /dev/null
     echo "INFO: SPAdes failure $failed; retrying assembly for $B" >&2
-    # SPAdes v3.12.0+ no longer allows --continue with other opts
     spades.py --restart-from last -o $O/asm/"$B" -t $NSLOTS >&2
   else
     spades.py --pe1-1 $O/trim_reads/"$B"_R1.paired.fq.gz\
@@ -231,8 +230,13 @@ while [[ ! -f $O/asm/"$B"/contigs.fasta ]] && [ $failed -lt 2 ]; do
   fi
   ((failed++))
 done
-module unload SPAdes/3.12.0
+module unload SPAdes/3.13.0
 verify_file "${O}/asm/${B}/contigs.fasta" 'SPAdes output assembly' '2M'
+if grep -E -q 'N{60}' "${O}/asm/${B}/contigs.fasta"; then
+  # avoid this again: https://github.com/ablab/spades/issues/273
+  echo "ERROR: $O/asm/$B/contigs.fasta contains 60+ Ns"
+  exit 1
+fi
 bash $LAB_HOME/.bin/prune.SPAdes.assembly.dirs.bash $O/asm/"$B"
 
 # Post-process SPAdes and SKESA assemblies
@@ -251,7 +255,7 @@ rm $O/asm/skesa_"$B"
 if [[ $(find $O/asm/unicyc_"$B".fna -type f -size +2M 2> /dev/null) ]]; then
   echo "INFO: found unicycler assembly for $B" >&2
 else
-  module load ncbi-blast+/2.6.0 SPAdes/3.12.0 bowtie2/2.3.3.1 \
+  module load ncbi-blast+/2.6.0 SPAdes/3.13.0 bowtie2/2.3.3.1 \
    samtools/1.8 java/jdk1.8.0_131 pilon/1.22 bcftools/1.7 \
    ALE/20130717 gcc/5.4
   source activate py3unicycler
@@ -262,7 +266,7 @@ else
    --spades_tmp_dir "$TMP_DIR" --min_polish_size 1000 \
    -t $NSLOTS --min_fasta_length 1000 --keep 0 --verbosity 2 >&2
   source deactivate
-  module unload ncbi-blast+/2.6.0 SPAdes/3.12.0 bowtie2/2.3.3.1 \
+  module unload ncbi-blast+/2.6.0 SPAdes/3.13.0 bowtie2/2.3.3.1 \
    samtools/1.8 java/jdk1.8.0_131 pilon/1.22 bcftools/1.7 \
    ALE/20130717 gcc/5.4
   mv -f $O/asm/unicyc_"$B"/assembly.fasta $O/asm/unicyc_"$B".fna
@@ -344,7 +348,7 @@ pigz -9f $O/trim_reads/"$B"_kraken.tab
 
 module load kraken/2.0.0
 export KRAKEN2_DEFAULT_DB=/scicomp/reference/kraken/2.0.0
-kraken2 --threads $NSLOTS --gzip-compressed \
+kraken2 --threads $NSLOTS --gzip-compressed --output /dev/null \
  --use-names --report $O/trim_reads/"$B"_kraken2.tab \
  $O/trim_reads/"$B"_R1.paired.fq.gz $O/trim_reads/"$B"_R2.paired.fq.gz \
  $O/trim_reads/"$B".single.fq.gz
@@ -359,9 +363,8 @@ module load diamond/0.9.22
 diamond blastp --threads $NSLOTS \
  --db "$LAB_HOME"/.lib/uniprot_trembl.dmnd \
  --query $O/annot/$B/$B.faa \
- --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen\
+ --outfmt 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen \
  --out $O/annot/$B.faa.diamond-trembl.full.tab \
- --tmpdir "$TMP_DIR" \
  --verbose
 module unload diamond/0.9.22
 verify_file "$O/annot/$B.faa.diamond-trembl.full.tab" 'UniProtKB/TrEMBL protein alignment' '1k'
