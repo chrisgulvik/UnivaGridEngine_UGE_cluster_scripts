@@ -98,10 +98,9 @@ else
 
   # Remove PhiX
   module load java/jdk1.8.0_131 BBMap/35.92
-  RAMSIZE_TOT=$(get_GB_free_memory_total)
   PHIX=$LAB_HOME/.lib/PhiX_NC_001422.1.fasta
   verify_file "$PHIX" 'PhiX genome' '5k'
-  bbduk.sh -Xmx"$RAMSIZE_TOT"g threads=$NSLOTS k=31 hdist=1\
+  bbduk.sh threads=$NSLOTS k=31 hdist=1\
    ref="$PHIX" in="$R1" in2="$R2"\
    out=$O/trim_reads/"$B"-noPhiX-R1.fsq out2=$O/trim_reads/"$B"-noPhiX-R2.fsq\
    qin=auto qout=33 overwrite=t
