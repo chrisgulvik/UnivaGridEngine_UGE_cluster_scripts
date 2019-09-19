@@ -9,7 +9,7 @@ fi
 
 # Input requirements
 source $HOME/.bashrc
-source /etc/profile.d/modules.sh
+source /etc/profile.d/z00_lmod.sh
 if [[ -z "$LAB_HOME" ]]; then
   echo 'ERROR: $LAB_HOME not set' >&2
   exit 1
@@ -23,11 +23,11 @@ fi
 mkdir -p $O/qa
 
 # QA assemblies
-module load quast/4.3
-quast.py --output-dir $O/qa --min-contig 100 --threads $NSLOTS\
- --no-html --gene-finding --gene-thresholds 300 --contig-thresholds 500,1000\
- --ambiguity-usage one --strict-NA --silent $ASM_DIR/*.fna
-module unload quast/4.3
+module load quast/5.0
+quast.py --output-dir $O/qa --min-contig 100 --threads $NSLOTS \
+ --no-html --gene-finding --gene-thresholds 300 --contig-thresholds 500,1000 \
+ --ambiguity-usage one --strict-NA --silent $ASM_DIR/*.fna 2>&1
+module unload quast/5.0
 rm -rf $O/qa/{basic_stats,predicted_genes,quast_corrected_input}
 rm -f $O/qa/{quast.log,report.{pdf,txt,tsv,tex},transposed_report.{txt,tex}}
 mv -f $O/qa/transposed_report.tsv $O/qa/Summary.Assemblies.tab
@@ -47,6 +47,8 @@ ERROR: incorrect number (${#READS[@]}) of FastQ files
   """ >&2
   exit 1
 fi
+IFS=$'\n' READS=($(sort --dictionary-order <<<"${READS[*]}"))
+unset IFS
 
 echo -n '' > $O/qa/Summary.Illumina.CleanedReads-Bases.tab
 for (( i=0; i<${#READS[@]}; i+=3 )); do
@@ -64,23 +66,30 @@ for (( i=0; i<${#READS[@]}; i+=3 )); do
   fi
   echo -ne "$b1\t" >> $O/qa/Summary.Illumina.CleanedReads-Bases.tab
   # Quantify nucleotides per read set
-  zcat $read1 $read2 $single |\
-   awk 'BEGIN{SUM=0} {if(NR%4==2){SUM+=length($0)}} END{print SUM}'\
+  zcat $read1 $read2 $single | \
+   awk 'BEGIN{SUM=0} {if(NR%4==2){SUM+=length($0)}} END{print SUM}' \
    >> $O/qa/Summary.Illumina.CleanedReads-Bases.tab
 done
 
 # Report coverage
+echo -n '' > $O/qa/Summary.Illumina.GenomeCoverage.tab
 while IFS=$'\t' read -r -a ln; do
-  if grep -q "skesa_" <<< "${ln[0]}" || grep -q "unicyc_" <<< "${ln[0]}"; then
+  if grep -q -e "skesa_" -e "unicyc_" -e ".uncorrected" <<< "${ln[0]}"; then
     continue
   fi
   basepairs=$(grep ${ln[0]} $O/qa/Summary.Illumina.CleanedReads-AlnStats.tab \
-   2> /dev/null | cut -f 2)
-  if [[ ! "${basepairs}" =~ ^[0-9]+$ ]]; then
+   2> /dev/null | awk '{print $2}')
+  if [[ "${basepairs}" =~ ^[0-9]+$ ]]; then
+    echo "INFO: read alignment data for ${ln[0]} used for coverage" >&2
+  else
     basepairs=$(grep ${ln[0]} $O/qa/Summary.Illumina.CleanedReads-Bases.tab \
      | cut -f 2)
+    echo "INFO: read alignment data absent for ${ln[0]}, so cleaned bases" >&2
+    echo "      given to the assembler were used to calculate coverage" >&2
   fi
   genomelen=${ln[7]}
   cov=$(echo "scale=1;($basepairs/$genomelen)" | bc)
-  echo -e "${ln[0]}\t${cov}"x >> $O/qa/Summary.Illumina.GenomeCoverage.tab
+  if [[ "${cov}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo -e "${ln[0]}\t${cov}"x >> $O/qa/Summary.Illumina.GenomeCoverage.tab
+  fi
 done < <(grep -v 'Total length' $O/qa/Summary.Assemblies.tab)
