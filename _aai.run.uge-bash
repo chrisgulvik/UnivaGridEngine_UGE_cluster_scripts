@@ -43,8 +43,8 @@ fi
 
 # Optional non-default parameters for AAI comparison
 XOPTS=''
-[[ ! -z "${ALIGNER}" ]] && { XOPTS="--aligner $ALIGNER "; }
-[[ ! -z "${ALN_FRAC}" ]] && { XOPTS="--fraction $ALN_FRAC "; }
+[[ ! -z "${ALIGNER}" ]] && { XOPTS+="--aligner $ALIGNER "; }
+[[ ! -z "${ALN_FRAC}" ]] && { XOPTS+="--fraction $ALN_FRAC "; }
 [[ ! -z "${PERC_ID}" ]] && { XOPTS+="--identity $PERC_ID "; }
 
 source /etc/profile.d/modules.sh
