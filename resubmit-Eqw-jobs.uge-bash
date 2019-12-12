@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+
+# Make sure we are capable of resubmitting jobs
+command -v qsub > /dev/null 2>&1 || { echo 'ERROR: qsub absent' >&2; exit 1; }
+
+# Collect and save Eqw status jobs as an array
+mapfile -t error_jobs < <(qstat | grep ' Eqw ' | awk '{print $1}')
+
+# Quit if no Eqw jobs found
+if [ "${#error_jobs[@]}" -eq 0 ]; then
+  echo 'No jobs found with Eqw status' >&2
+  exit 0
+fi
+
+i=0
+for jid in "${error_jobs[@]}"; do
+  # Capture submission command
+  mapfile -t cmd < <(qstat -j "${jid}" | grep '^submit_cmd:' |\
+   cut -f2- -d ':' | sed 's/^ *//g' | tr ' ' '\n')
+  if [ "${#cmd[@]}" -lt 2 ]; then
+    echo "ERROR: unable to retrieve the submission command for ${jid}" >&2
+    continue
+  fi
+  if [ "${cmd[0]}" != 'qsub' ]; then
+    echo "ERROR: unable to handle a job without starting with qsub" >&2
+    continue
+  fi
+  mapfile -t env_list < <(qstat -j "${jid}" | grep '^env_list:' |\
+   cut -f2- -d ':' | sed 's/^ *//g' | tr ',' '\n')
+  if [ "${#env_list[@]}" -gt 0 ]; then
+    # Set each variable found
+    for variable in "${env_list[@]}"; do
+      declare "${variable}"
+    done
+  fi
+  # Re-submit the job
+  "${cmd[@]}"
+  if [ $? -eq 0 ]; then
+  	# Silently remove the previously failed job if re-submission worked
+    qdel "${jid}" > /dev/null 2>&1
+    ((i++))
+  fi
+done
+echo "${i} jobs resubmitted"
