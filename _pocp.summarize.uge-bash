@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+
+
+# Input requirements
+[[ -z "$P" ]] && { echo 'ERROR: $P not set' >&2; exit 1; }
+
+shopt -s nullglob
+STATS=( "$P"/AAI--*/aai.*,*.stats.tab )
+shopt -u nullglob
+
+if [ ${#STATS[@]} -lt 3 ]; then
+  echo 'ERROR: at least 3 stats files are required to summarize' >&2
+  exit 1
+fi
+
+# Verify each file has data
+for f in "${STATS[@]}"; do
+  lines=$(grep -o '[0-9]%' $f | wc -l)
+  if [ $lines -ne 6 ]; then
+    echo "ERROR: $f lacks data to extract" >&2
+    exit 1
+  fi
+done
+
+# Summarize AAI values
+echo -n '' > "$P"/POCP.Summary.tab
+for f in "${STATS[@]}"; do
+  PAIR=$(basename $f .stats.tab | sed 's/aai\.//1')
+  S1=${PAIR%%,*}
+  S2=${PAIR##*,}
+
+  # Calculate POCP from bidirectional values
+  PROT=$(grep ',' $f | cut -f 2)
+  if [[ ! "${PROT}" =~ ',' ]]; then
+    echo "ERROR: absent comma for bidirectional comparison in ${PROT} within the $f file" >&2
+    exit 1
+  fi
+  CNT_CORE=0
+  CNT_TOTAL=0
+  for sample_proteins in ${PROT%%,*} ${PROT##*,}; do
+    if [[ ! "${sample_proteins}" =~ '/' ]]; then
+      echo "ERROR: absent backslash for fraction of filtered proteins in ${sample_proteins} within the $f file" >&2
+      exit 1
+    fi
+    CNT_CORE=$(( $CNT_CORE + ${sample_proteins%%/*}))
+    CNT_TOTAL=$(( $CNT_TOTAL + ${sample_proteins##*/}))
+  done
+  POCP=$(echo "scale=3;(${CNT_CORE} / ${CNT_TOTAL} * 100)" | bc)
+  if ! [[ "${POCP%.*}" -ge 0 && "${POCP%.*}" -le 100 ]]; then
+    echo "ERROR: found AAI $AAI for $B1,$B2; skipping the comparison" >&2
+    exit 1
+  fi
+  echo -e "$S1\t$S2\t$POCP" >> "$P"/POCP.Summary.tab
+done
+A='Sample\tSample\tPercentage_of_Conserved_Proteins[%]'
+sed -i "1i ${A}" "$P"/POCP.Summary.tab
+
+# Cleanup empty logfiles
+find "$P"/.log -maxdepth 1 -type f -regextype posix-extended \
+ -regex ".*/aai.*.(e|o|pe|po)[0-9]{7}" \
+ -size 0 -print0 2> /dev/null | xargs -0 rm --
