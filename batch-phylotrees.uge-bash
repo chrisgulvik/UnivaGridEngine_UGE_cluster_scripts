@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+
+
+usage() { 
+  echo "
+Usage: ${0##*/} InputDirectory [OutputDirectory] [-h|--help]
+
+Required:
+  <InputDirectory>   All GenBank formatted files ending in:
+                       {gb,gbk,gbf,gbff}
+                       with optional .gz compression will be analyzed.
+                     Commas are forbidden in filenames.
+
+                     Only files that exceed 350 kB in size within <InDir>
+                     will be used.
+
+Optional:
+  -h | --help        Show this help message and exit.
+
+  <OutputDirectory>  Location for the output files, which
+                     includes job logfiles. Output files
+                     will be overwritten if already present.
+                     Default: current working directory.
+
+  "
+}
+
+check_submit_status()
+{
+  # 1=job ID number; 2=job IDs logfile
+  if [[ $1 != *submitted* ]]; then
+    echo 'ERROR: improper job submission' >&2
+    exit 1
+  fi
+  echo "$1" >> "$2"
+}
+
+# Requirements
+command -v qsub >/dev/null 2>&1 || { echo 'ERROR: qsub not found' >&2; exit 1; }
+[[ $1 == "--help" || $1 == "-h" ]] && { usage; exit 0; }
+if [[ $# -lt 1  || $# -gt 2 ]]; then
+  echo "ERROR: improper number ("$#") of arguments provided" >&2
+  usage
+  exit 1
+fi
+source $HOME/.bashrc
+if [[ -z "$LAB_HOME" ]]; then
+  echo 'ERROR: $LAB_HOME not set' >&2
+  exit 1
+fi
+
+# I/O handling
+IN=$(readlink -f "$1")
+if [[ -z "$2" ]]; then
+  OUT="${PWD}"
+else
+  OUT=$(readlink -f "$2")
+fi
+[ ! -d "$OUT"/.log ] && mkdir -pv "$OUT"/.log > /dev/null
+[ ! -d "$OUT"/phy ] && mkdir -pv "$OUT"/phy > /dev/null
+LOG_BASE=$(basename $0 .uge-bash)
+LOGFILE="$OUT"/.log/"$LOG_BASE".log.txt
+JOB_IDS="$OUT"/.log/"$LOG_BASE".job_ids.txt
+
+# Log system and user info for debugging
+echo "[START]           $(date)" > "$LOGFILE"
+echo "[SYS]             $(uname -nro)" >> "$LOGFILE"
+echo "[USER]            $USER" >> "$LOGFILE"
+echo "[CWD]             $PWD" >> "$LOGFILE"
+source /etc/profile.d/modules.sh && module purge
+echo "[MODULES LOADED]  $(module list 2>&1 | \
+  sed 's/Currently Loaded Modulefiles://1')" >> "$LOGFILE"
+echo -e "[PATH]            $PATH\n" >> "$LOGFILE"
+echo "[I/O]" >> "$LOGFILE"
+echo "Input directory:  $IN" | tee -a "$LOGFILE"
+echo -e "Output directory: $OUT/phy\n" | tee -a "$LOGFILE"
+
+if [[ $(find . -maxdepth 1 -type f -regextype posix-extended \
+  -regex ".*[[:space:]].*\.(gb,gbk,gbf,gbff)($|\.gz$)" \
+  | wc -l) -gt 0 ]]; then
+  echo 'ERROR: whitespace within input filenames are not allowed' >&2
+  echo 'Offending files are:' >&2
+  find . -maxdepth 1 -type f -regextype posix-extended \
+   -regex ".*[[:space:]].*\.(gb,gbk,gbf,gbff)($|\.gz$)" \
+   -printf '%p\t%s bytes\n' >&2
+  exit 1
+fi
+shopt -s nullglob
+FILES=( "${IN}"/*.{gb,gbk,gbf,gbff}{'',.gz} )
+shopt -u nullglob
+if [[ "${#FILES[@]}" -eq 1 ]]; then
+  echo 'ERROR: no GenBank files found' >&2
+  exit 1
+fi
+[[ "${FILES[@]}" =~ "," ]] && { usage; exit 1; }
+echo -e "[SAMPLES]\n$(echo ${FILES[@]} | tr ' ' '\n')\n" | \
+  tee -a "$LOGFILE"
+
+GBK=()
+for file in "${FILES[@]}"; do
+  if [[ $(find -L "${file}" -type f -size +350k 2>/dev/null) ]]; then
+    GBK+=("${file}")
+  else
+    echo "INFO: ${file} not >350 kB so it was excluded" >&2
+  fi
+done
+
+echo -n '' > "$JOB_IDS"
+
+# 16S rRNA encoding gene tree
+JID=$(qsub -q all.q -q short.q -pe smp 1 -N phy.16S \
+  -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
+  -v GENE=16S,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=rrna \
+  $LAB_HOME/.job/_gene.phylotree.uge-bash)
+check_submit_status "$JID" "$JOB_IDS"
+
+# First search for gene name but fallback on exact product match
+declare -A GENE_PROD=(
+  [atpD]='ATP synthase subunit beta'
+  [dnaJ]='\"molecular chaperone DnaJ\" \"Chaperone protein DnaJ\"'
+  [dnaK]='\"molecular chaperone DnaK\" \"Chaperone protein DnaK\"'
+  [glnA]='Glutamine synthetase'
+  [gyrB]='DNA gyrase subunit A'
+  [rpoA]='DNA-directed RNA polymerase subunit alpha'
+  [rpoB]='DNA-directed RNA polymerase subunit beta'
+  [rpoC]="DNA-directed RNA polymerase subunit beta\'"
+  [sodA]='superoxide dismutase'
+  [tuf]='Elongation factor Tu'
+  [pheS]='phenylalanine--tRNA ligase subunit alpha'
+  [recA]='recombinase A'
+  [recN]='\"DNA recombination protein RecN\" \"DNA repair protein RecN\"'
+  [thrC]='threonine synthase'
+)
+for key in "${!GENE_PROD[@]}"; do
+  val="'${GENE_PROD[$key]}'"
+  JID=$(qsub -q all.q -q short.q -pe smp 1 -N phy."$key" \
+    -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
+    -v PROD="$val",GENE="$key",OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=gene_or_exactproduct \
+    $LAB_HOME/.job/_gene.phylotree.uge-bash)
+  check_submit_status "$JID" "$JOB_IDS"
+done
+
+# First search for gene name but fallback on query to be within the product annotation
+declare -A GENE_PROD=(
+  [groL]='\"chaperonin GroEL\" \"60 kDa chaperonin\"' #sometimes >1 copy with <int> suffix
+  [secA]='protein translocase subunit SecA' #sometimes 'Pre' or 'pre' prefix
+  [secY]='protein translocase subunit SecY' #sometimes 'Pre' or 'pre' prefix
+)
+for key in "${!GENE_PROD[@]}"; do
+  val="'${GENE_PROD[$key]}'"
+  JID=$(qsub -q all.q -q short.q -pe smp 1 -N phy."$key" \
+    -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
+    -v PROD="$val",GENE="$key",OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=gene_or_withinproduct \
+    $LAB_HOME/.job/_gene.phylotree.uge-bash)
+  check_submit_status "$JID" "$JOB_IDS"
+done
