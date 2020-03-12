@@ -9,7 +9,8 @@ Required:
   <InputDirectory>   All assembly files ending in fa,fas,
                      fsa,fna,fasta will be analyzed.
                      Annotated files are used if present in:
-                     <OutDir>/*.{gb,gbf,gbk} or <OutDir>/*/*.{gb,gbf,gbk}
+                     <OutDir>/*.{gb,gbf,gbff,gbk} with optional
+                     gunzip compression.
                      Commas are forbidden in filenames.
 
 Optional:
@@ -80,18 +81,17 @@ shopt -u nullglob
 echo -e "[ASSEMBLIES]\n$(echo ${ASM[@]} | tr ' ' '\n')\n" | \
   tee -a "$LOGFILE"
 
-if [ ${#ASM[@]} -lt 3 ]; then
-  echo 'ERROR: at least 3 assemblies are required' >&2
+if [ ${#ASM[@]} -lt 1 ]; then
+  echo 'ERROR: at least 1 assembly is required' >&2
   exit 1
 fi
 
 echo "Annotating ${#ASM[@]} genomes..."
 echo -n '' > "$JOB_IDS"
-shopt -s globstar
 i=0
 for A in "${ASM[@]}"; do
   B=$(basename ${A%\.*} | sed 's/[_-\.\(\)]//g')
-  CNT_GBK=$(ls $OUT/$B.gb{'',f,k} $OUT/**/$B.gb{'',f,k} 2> /dev/null | wc -l)
+  CNT_GBK=$(ls $OUT/$B.gb{'',f,ff,k} 2> /dev/null | wc -l)
   if [ "${CNT_GBK}" -gt 0 ]; then
     echo "Found $B annotated already; skipping prokka annotation..."
     continue
@@ -111,37 +111,53 @@ done
 echo "${i} assemblies are being annotated before sequence extractions begin" | \
   tee -a "$LOGFILE"
 sleep 0.5
-shopt -u globstar
 JOBS=$(cat "$JOB_IDS" | cut -f 3 -d ' ' | \
   sed -e 's/$/,/' | tr -d '\n' | sed -e 's/,$//')
 
 # 16S rRNA encoding gene tree
-JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N phy.16S \
+JID=$(qsub -q all.q -q short.q -pe smp 1 -N phy.16S \
   -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
   -v GENE=16S,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=rrna \
   $LAB_HOME/.job/_gene.phylotree.uge-bash)
 check_submit_status "$JID" "$JOB_IDS"
 
-# Product name trees
+# First search for gene name but fallback on exact product match
 declare -A GENE_PROD=(
+  [atpD]='ATP synthase subunit beta'
+  [dnaJ]='\"molecular chaperone DnaJ\" \"Chaperone protein DnaJ\"'
+  [dnaK]='\"molecular chaperone DnaK\" \"Chaperone protein DnaK\"'
+  [glnA]='Glutamine synthetase'
+  [gyrB]='DNA gyrase subunit A'
+  [rpoA]='DNA-directed RNA polymerase subunit alpha'
+  [rpoB]='DNA-directed RNA polymerase subunit beta'
+  [rpoC]="DNA-directed RNA polymerase subunit beta\'"
+  [sodA]='superoxide dismutase'
+  [tuf]='Elongation factor Tu'
+  [pheS]='phenylalanine--tRNA ligase subunit alpha'
   [recA]='recombinase A'
+  [recN]='\"DNA recombination protein RecN\" \"DNA repair protein RecN\"'
+  [thrC]='threonine synthase'
+)
+for key in "${!GENE_PROD[@]}"; do
+  val="'${GENE_PROD[$key]}'"
+  JID=$(qsub -q all.q -q short.q -pe smp 1 -N phy."$key" \
+    -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
+    -v PROD="$val",GENE="$key",OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=gene_or_exactproduct \
+    $LAB_HOME/.job/_gene.phylotree.uge-bash)
+  check_submit_status "$JID" "$JOB_IDS"
+done
+
+# First search for gene name but fallback on query to be within the product annotation
+declare -A GENE_PROD=(
+  [groL]='\"chaperonin GroEL\" \"60 kDa chaperonin\"' #sometimes >1 copy with <int> suffix
   [secA]='protein translocase subunit SecA' #sometimes 'Pre' or 'pre' prefix
   [secY]='protein translocase subunit SecY' #sometimes 'Pre' or 'pre' prefix
 )
 for key in "${!GENE_PROD[@]}"; do
   val="'${GENE_PROD[$key]}'"
-  JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N phy."$key" \
+  JID=$(qsub -q all.q -q short.q -pe smp 1 -N phy."$key" \
     -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
-    -v PROD="$val",GENE="$key",OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=product \
-    $LAB_HOME/.job/_gene.phylotree.uge-bash)
-  check_submit_status "$JID" "$JOB_IDS"
-done
-
-# Gene name trees
-for g in atpD dnaJ glnA groL rpoA rpoB rpoC sodA tuf pheS thrC; do
-  JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N phy.$g \
-    -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
-    -v GENE=$g,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=gene \
+    -v PROD="$val",GENE="$key",OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=gene_or_withinproduct \
     $LAB_HOME/.job/_gene.phylotree.uge-bash)
   check_submit_status "$JID" "$JOB_IDS"
 done
