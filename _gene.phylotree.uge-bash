@@ -11,32 +11,61 @@ source /etc/profile.d/modules.sh
 source $HOME/.bashrc
 export PATH="$LAB_HOME/.anaconda2/bin:$PATH"
 
-function extraction_method() { 
+extract_sequence() {
+  local _outfile="${OUT}"/phy/"${GENE}"."${B}".fa
   if [[ "$1" == "product" ]]; then
-    read -d '' SCRIPT_CMD <<- 'EOF'
-      python "$LAB_HOME"/.bin/extract.record.from.genbank.py -i "$G" \
-			-u product -o "$OUT"/phy/"$GENE"."$B".fa -q "$PROD" -y contains
-		EOF
+    python "$LAB_HOME"/.bin/extract.record.from.genbank.py -i "${file}" \
+     -u product -o "${_outfile}" -q "${PROD}" \
+     --search-type any_q_in_rec
   elif [[ "$1" == "gene" ]]; then
-    read -d '' SCRIPT_CMD <<- 'EOF'
-      python "$LAB_HOME"/.bin/extract.record.from.genbank.py -i "$G" \
-			-u gene -o "$OUT"/phy/"$GENE"."$B".fa -q "$GENE" -y full_exact
-		EOF
+    python "$LAB_HOME"/.bin/extract.record.from.genbank.py -i "${file}" \
+     -u gene -o "${_outfile}" -q "${GENE}" \
+     --search-type any_q_is_rec
+  elif [[ "$1" == "gene_or_exactproduct" ]]; then
+    python "$LAB_HOME"/.bin/extract.record.from.genbank.py -i "${file}" \
+     -u gene -o "${_outfile}" -q "${GENE}" \
+     --search-type any_q_is_rec
+    if [[ ! -f "${_outfile}" ]] || [[ ! -s "${_outfile}" ]]; then
+      python "$LAB_HOME"/.bin/extract.record.from.genbank.py -i "${file}" \
+       -u product -o "${_outfile}" -q "${PROD}" \
+       --search-type any_q_is_rec
+    fi
+  elif [[ "$1" == "gene_or_withinproduct" ]]; then
+    python "$LAB_HOME"/.bin/extract.record.from.genbank.py -i "${file}" \
+     -u gene -o "${_outfile}" -q "${GENE}" \
+     --search-type any_q_is_rec
+    if [[ ! -f "${_outfile}" ]] || [[ ! -s "${_outfile}" ]]; then
+      python "$LAB_HOME"/.bin/extract.record.from.genbank.py -i "${file}" \
+       -u product -o "${_outfile}" -q "${PROD}" \
+       --search-type any_q_in_rec
+    fi
   elif [[ "$1" == "rrna" ]]; then
-    read -d '' SCRIPT_CMD <<- 'EOF'
-      python "$LAB_HOME"/.bin/extract.record.from.genbank.py -i "$G" \
-			-u product -o "$OUT"/phy/"$GENE"."$B".fa -q '16S ribosomal RNA' \
-			-y full_exact -f rRNA
-		EOF
+    python "$LAB_HOME"/.bin/extract.record.from.genbank.py -i "${file}" \
+     -u product -o "${_outfile}" -q '16S ribosomal RNA' \
+     --search-type any_q_is_rec -f rRNA
+    if [[ ! -f "${_outfile}" ]] || [[ ! -s "${_outfile}" ]]; then
+      echo -n "INFO: absent 16S annotation in ${file};" >&2
+      echo ' trying RNAmmer...' >&2
+      python "$LAB_HOME"/.bin/genbank2fasta.py -i "${file}" \
+       -o "${file}".tmp-fasta
+      module load rnammer/1.2
+      rnammer -S bac -m ssu -f "${_outfile}" < "${file}".tmp-fasta
+      module unload rnammer/1.2
+      rm "${file}".tmp-fasta
+      if [[ $(grep -c '>' "${_outfile}") -eq 0 ]]; then
+        echo "INFO: RNAmmer was unable to locate a 16S sequence in ${file}" >&2
+        rm "${_outfile}"
+      fi
+    fi
   fi
 }
 
 # Find annotated GenBank files
-shopt -s nullglob globstar
-GBK=( "$OUT"/*.{gb,gbf,gbk} "$OUT"/**/*.{gb,gbf,gbk} )
-shopt -u nullglob globstar
-if [[ "${#GBK[@]}" -lt 3 ]]; then
-  echo "ERROR: at least 3 annotated files are required; found ${#GBK[@]}" >&2
+shopt -s nullglob
+GBK=( "$OUT"/*.{gb,gbk,gbf,gbff}{'',.gz} )
+shopt -u nullglob
+if [[ "${#GBK[@]}" -eq 0 ]]; then
+  echo "ERROR: unable to find GenBank files in ${OUT}" >&2
   exit 1
 else
   echo -e "[ANNOTATED FILES] FOR $GENE\n$(echo ${GBK[@]} | \
@@ -45,10 +74,10 @@ fi
 
 # Extract FastA sequence record from each GenBank file
 source activate bpy2
-for G in "${GBK[@]}"; do
-  B=$(basename "$G" | sed -e 's/\.gbf//1' -e 's/\.gbk//1' -e 's/\.gb//1')
-  extraction_method "$EXTRN"
-  eval "$SCRIPT_CMD"
+for file in "${GBK[@]}"; do
+  B=$(basename "${file}" .gz | \
+   sed -e 's/\.gbff//1' -e 's/\.gbf//1' -e 's/\.gbk//1' -e 's/\.gb//1')
+  extract_sequence "${EXTRN}"
   [ ! -f "$OUT"/phy/"$GENE"."$B".fa ] && { continue; }
   if [[ $(grep -c '>' "$OUT"/phy/"$GENE"."$B".fa) -gt 9 ]]; then
     echo -n "skipping $OUT/phy/$GENE.$B.fa due to too many (>9) sequence" >&2
@@ -70,13 +99,21 @@ for G in "${GBK[@]}"; do
 done
 source deactivate
 
+
+# Do comparisons and build tree if >1 input GenBank file
+if [[ "${#GBK[@]}" -eq 1 ]]; then
+  echo -n 'INFO: require at least two input GenBank files for similarity' >&2
+  echo ' calculations and phylogenetic tree construction' >&2
+  exit 0
+fi
+
 # Calculate pairwise similarities
 shopt -s nullglob
 FA=( "$OUT"/phy/"$GENE".*.fa )
 shopt -u nullglob
 if [[ "${#FA[@]}" -lt 3 ]]; then
-  echo "ERROR: at least 3 $GENE sequences are required; found ${#FA[@]}" >&2
-  exit 1
+  echo "INFO: at least 3 $GENE sequences are required; found ${#FA[@]}" >&2
+  exit 0
 fi
 module load ncbi-blast+/2.6.0
 python "$LAB_HOME"/.bin/calc.pairwise.similarities.py -e fa -p "$GENE". \
