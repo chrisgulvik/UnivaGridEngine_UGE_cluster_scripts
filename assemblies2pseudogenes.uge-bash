@@ -82,8 +82,8 @@ shopt -u nullglob
 echo -e "[ASSEMBLIES]\n$(echo ${ASM[@]} | tr ' ' '\n')\n" | \
   tee -a "$LOGFILE"
 
-if [ ${#ASM[@]} -lt 3 ]; then
-  echo 'ERROR: at least 3 genomes are required for batch analysis' >&2
+if [ ${#ASM[@]} -lt 1 ]; then
+  echo 'ERROR: at least 1 genome is required for analysis' >&2
   exit 1
 fi
 
