@@ -66,7 +66,7 @@ echo -e "[CWD]             $PWD\n" >&2
 
 # Setup dir structure
 JOB_ID=$(basename $0)
-mkdir -p $O/{trim_reads,asm,annot,qa}
+mkdir -p $O/{trim_reads,asm,annot,ssu,qa}
 TMP_DIR=$(mktemp --tmpdir=/dev/shm \
  --directory "${USER}"."${JOB_ID}".XXXXXX)
 if [ $? -ne 0 ]; then
@@ -207,7 +207,7 @@ fi
 
 # Investigate taxonomic identity of cleaned reads
 if [ ! -s $O/trim_reads/"$B".taxonomy-reads.tab ]; then
-  export KRAKEN_DEFAULT_DB=/scicomp/reference/kraken/0.10.5/standard
+  export KRAKEN_DEFAULT_DB=/scicomp/reference/kraken/OLD/1.0.0/kraken_db
   module load kraken/1.0.0
   kraken --threads $NSLOTS --fastq-input --gzip-compressed \
    $O/trim_reads/"$B"_R1.paired.fq.gz $O/trim_reads/"$B"_R2.paired.fq.gz \
@@ -221,7 +221,7 @@ fi
 
 if [ ! -s $O/trim_reads/"$B".taxonomy2-reads.tab ]; then
   module load kraken/2.0.8
-  export KRAKEN2_DEFAULT_DB=/scicomp/reference/kraken/2.0.0
+  export KRAKEN2_DEFAULT_DB=/scicomp/reference/kraken/OLD/2.0.0
   kraken2 --threads $NSLOTS --gzip-compressed --output /dev/null \
    --use-names --report $O/trim_reads/"$B"_kraken2.tab \
    $O/trim_reads/"$B"_R1.paired.fq.gz $O/trim_reads/"$B"_R2.paired.fq.gz \
@@ -254,7 +254,7 @@ while [[ ! -f $O/asm/"$B"/contigs.fasta ]] && [ $failed -lt 2 ]; do
   ((failed++))
 done
 module unload SPAdes/3.13.0
-verify_file "${O}/asm/${B}/contigs.fasta" 'SPAdes output assembly' '2M'
+verify_file "${O}/asm/${B}/contigs.fasta" 'SPAdes output assembly' '1M'
 if grep -E -q 'N{60}' "${O}/asm/${B}/contigs.fasta"; then
   # avoid this again: https://github.com/ablab/spades/issues/273
   echo "ERROR: $O/asm/$B/contigs.fasta contains 60+ Ns" >&2
@@ -278,7 +278,7 @@ python $LAB_HOME/.bin/filter.contigs.py\
 source deactivate
 
 # Correct cleaned SPAdes contigs with cleaned PE reads
-verify_file "$O/asm/$B.uncorrected.fna" 'filtered SPAdes assembly' '2M'
+verify_file "$O/asm/$B.uncorrected.fna" 'filtered SPAdes assembly' '1M'
 module load bwa/0.7.17 samtools/1.9 java/jdk1.8.0_92 pilon/1.22
 echo -n '' > $O/asm/"$B".InDels-corrected.cnt.txt
 echo -n '' > $O/asm/"$B".SNPs-corrected.cnt.txt
@@ -294,7 +294,7 @@ for _ in {1..3}; do
   pilon --genome $O/asm/"$B".uncorrected.fna --frags $O/asm/"$B".paired.bam\
    --output "$B" --outdir $O/asm --changes \
    --fix snps,indels --mindepth 0.50 --threads $NSLOTS >&2
-  verify_file "$O/asm/$B.uncorrected.fna" 'polished assembly' '2M'
+  verify_file "$O/asm/$B.uncorrected.fna" 'polished assembly' '1M'
   grep -c '-' $O/asm/"$B".changes >> $O/asm/"$B".InDels-corrected.cnt.txt
   grep -vc '-' $O/asm/"$B".changes >> $O/asm/"$B".SNPs-corrected.cnt.txt
   rm -f $O/asm/"$B".{changes,uncorrected.fna}
@@ -304,7 +304,7 @@ for _ in {1..3}; do
 done
 module unload bwa/0.7.17 samtools/1.9 java/jdk1.8.0_92 pilon/1.22
 mv -f $O/asm/"$B".uncorrected.fna $O/asm/"$B".fna
-verify_file "$O/asm/$B.fna" 'corrected SPAdes assembly' '2M'
+verify_file "$O/asm/$B.fna" 'corrected SPAdes assembly' '1M'
 
 # Single read mapping if available
 if [[ $(find $O/trim_reads/"$B".single.fq.gz -type f -size +5k 2> /dev/null) ]]; then
@@ -359,3 +359,49 @@ for ext in gb gbf gbff gbk ; do
     break
   fi
 done
+
+# 16S extraction
+ssu_file="${O}/ssu/${B}.fa"
+if [[ -s "${O}/annot/${B}.gbk" ]]; then
+  python "${LAB_HOME}"/.bin/extract.record.from.genbank.py -i "${O}/annot/${B}.gbk" \
+   -u product -o "${ssu_file}" -q '16S ribosomal RNA' \
+   --search-type any_q_is_rec -f rRNA
+fi
+if [[ ! -f "${ssu_file}" ]] || [[ ! -s "${ssu_file}" ]]; then
+  echo -n "INFO: absent 16S rRNA gene annotation in ${O}/annot/${B}.gbk;" >&2
+  echo ' trying RNAmmer...' >&2
+  module load rnammer/1.2
+  cd "${TMP_DIR}"
+  rnammer -S bac -m ssu -f "${ssu_file}" < "${O}/asm/${B}.fna"
+  module unload rnammer/1.2
+  if [[ $(grep -c '>' "${ssu_file}") -eq 0 ]]; then
+    echo "INFO: RNAmmer was unable to locate a 16S rRNA gene sequence in ${O}/asm/${B}.fna" >&2
+    rm "${ssu_file}"
+    exit 2
+  fi
+fi
+verify_file "${ssu_file}" '16S extracted FastA file' '500c'
+awk -v awk_var="${B}" '/^>/{print ">" awk_var "_" ++i; next} {print}' \
+  "${ssu_file}" > "${O}/ssu/${B}.fa-renamed" ;
+mv -f "${O}/ssu/${B}.fa-renamed" "${ssu_file}"
+verify_file "${ssu_file}" '16S extracted and renamed FastA file' '500c'
+
+# Classify each 16S sequence record
+module load ncbi-blast+/2.9.0
+export BLASTDB=/scicomp/reference/ncbi-blast/blast/db
+blastn -word_size 10 -task blastn -db 16S_ribosomal_RNA \
+ -num_threads "${NSLOTS}" \
+ -query "${O}/ssu/${B}.fa" \
+ -out "${O}/ssu/${B}.blast.tsv" \
+ -outfmt "6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qcovhsp ssciname"
+verify_file "${O}/ssu/${B}.blast.tsv" '16S blastn nr output file' '10c'
+python "${LAB_HOME}"/.bin/filter.blast.py -i "${O}/ssu/${B}.blast.tsv" \
+ -o "${O}/ssu/${B}.blast.tab"
+verify_file "${O}/ssu/${B}.blast.tab" 'filtered 16S blastn nr file' '10c'
+awk -F $'\t' 'BEGIN{OFS=FS}; {print $1, $3 "% identity", $13 "% alignment", $14}' "${O}/ssu/${B}.blast.tab" \
+ > "${O}/ssu/${B}.top-species-nr.tsv"
+rm "${O}/ssu/${B}.blast.tab"
+cat "${O}/ssu/${B}.top-species-nr.tsv" >> "${O}"/qa/Summary.16S.tab
+pigz -9f "${O}/ssu/${B}.blast.tsv"
+module unload ncbi-blast+/2.9.0
+
