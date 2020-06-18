@@ -53,11 +53,22 @@ Output directory structure:
       {skesa,unicyc}_<sampleB>.fna.gz
       {skesa,unicyc}_<sampleC>.fna.gz
   qa/
+      Summary.16S.tab
       Summary.Assemblies.tab
       Summary.Illumina.CleanedReads-AlnStats.tab
       Summary.Illumina.CleanedReads-Bases.tab
       Summary.Illumina.GenomeCoverage.tab
       Summary.Illumina.Pseudogenes.tab
+  ssu/
+      <SampleA>.fa
+      <SampleA>.blast.tsv.gz      
+      <SampleA>.top-species-nr.tsv
+      <SampleB>.fa
+      <SampleB>.blast.tsv.gz
+      <SampleB>.top-species-nr.tsv
+      <SampleC>.fa
+      <SampleC>.blast.tsv.gz
+      <SampleC>.top-species-nr.tsv
   trim_reads/
       <sampleA>_R1.paired.fq.gz
       <sampleA>_R2.paired.fq.gz
