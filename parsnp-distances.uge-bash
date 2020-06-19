@@ -56,7 +56,7 @@ echo "[I/O]" >> "$LOGFILE"
 echo -e "Parsnp directory: $PARSNP_DIR\n" | tee -a "$LOGFILE"
 
 # Submit the job
-JID=$(qsub -q short.q -pe smp 1-128 -N parsnp.dist-calc \
+JID=$(qsub -q short.q -pe smp 16-128 -N parsnp.dist-calc \
   -o $PARSNP_DIR/.log -e $PARSNP_DIR/.log \
   -v PARSNP_DIR=$PARSNP_DIR \
   $LAB_HOME/.job/_parsnp-distances.uge-bash)

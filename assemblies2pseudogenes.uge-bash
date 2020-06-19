@@ -91,7 +91,7 @@ echo "Submitting ${#ASM[@]} jobs..."
 for A in "${ASM[@]}"; do
   FNA=$(readlink -f $IN/$A)
   B=$(basename ${A%\.*} | sed 's/[_-\.\(\)]//g')
-  JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N pseudo.$B \
+  JID=$(qsub -q all.q -q short.q -pe smp 16-128 -N pseudo.$B \
     -o $OUT/.log -e $OUT/.log -v ASM=$FNA,B=$B,O=$OUT \
     $LAB_HOME/.job/_pseudogenes.uge-bash)
   [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }

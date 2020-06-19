@@ -43,11 +43,8 @@ Output directory structure:
       ANI.Summary.tab
   annot/
       <sampleA>.gbk
-      <sampleA>.faa.diamond-trembl.pdf
       <sampleB>.gbk
-      <sampleB>.faa.diamond-trembl.pdf
       <sampleC>.gbk
-      <sampleC>.faa.diamond-trembl.pdf
   asm/
       <sampleA>/
           assembly_graph_with_scaffolds.gfa
@@ -61,11 +58,13 @@ Output directory structure:
           assembly_graph_with_scaffolds.gfa
           {params.txt,spades.log}.gz
       <sampleA>.fna
+      <sampleA>.InDels-corrected.cnt.txt
+      <sampleA>.SNPs-corrected.cnt.txt
       <sampleB>.fna
+      <sampleB>.InDels-corrected.cnt.txt
+      <sampleB>.SNPs-corrected.cnt.txt
       <sampleC>.fna
-      {skesa,unicyc}_<sampleA>.fna.gz
-      {skesa,unicyc}_<sampleB>.fna.gz
-      {skesa,unicyc}_<sampleC>.fna.gz
+      <sampleC>.InDels-corrected.cnt.txt
   parsnp/
       parsnp.ggr
       parsnp.tree
@@ -76,7 +75,16 @@ Output directory structure:
       Summary.Illumina.CleanedReads-AlnStats.tab
       Summary.Illumina.CleanedReads-Bases.tab
       Summary.Illumina.GenomeCoverage.tab
-      Summary.Illumina.Pseudogenes.tab
+  ssu/
+      16S.<sampleA>.fa
+      16S.<sampleB>.fa
+      16S.<samplec>.fa
+      <sampleA>.16S-top-species.tsv
+      <sampleA>.blast.tsv.gz
+      <sampleB>.16S-top-species.tsv
+      <sampleB>.blast.tsv.gz
+      <sampleC>.16S-top-species.tsv
+      <sampleC>.blast.tsv.gz
   trim_reads/
       <sampleA>_R1.paired.fq.gz
       <sampleA>_R2.paired.fq.gz
@@ -165,7 +173,7 @@ for (( i=0; i<${#READS[@]}; i+=2 )); do
     exit 1
   fi
   echo "  $b1"
-  JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N TrimAsmAnnot.$b1 \
+  JID=$(qsub -q all.q -q short.q -pe smp 16-128 -N TrimAsmAnnot.$b1 \
     -e $OUT/.log -o $OUT/.log \
     -v R1=$read1,R2=$read2,B=$b1,O=$OUT \
     $LAB_HOME/.job/_trim.asm.annot.uge-bash)
@@ -177,7 +185,7 @@ JOBS=$(cat "$JOB_IDS" | cut -f 3 -d ' ' | \
   sed -e 's/$/,/' | tr -d '\n' | sed -e 's/,$//')
 a=$OUT/asm
 r=$OUT/trim_reads
-JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N QA.reads.asm \
+JID=$(qsub -q all.q -q short.q -pe smp 16-128 -N QA.reads.asm \
   -e $OUT/.log -o $OUT/.log -hold_jid ${JOBS:-0000001} \
   -v ASM_DIR=$a,TRIM_DIR=$r,O=$OUT \
   $LAB_HOME/.job/_summarize.FastQ.FastA.uge-bash)
@@ -187,14 +195,14 @@ check_submit_status "$JID" "$JOB_IDS"
 [ ${#READS[@]} -lt 3 ] && { exit 0; }
 
 # Compute ANI values
-JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N ANI \
+JID=$(qsub -q all.q -q short.q -pe smp 16-128 -N ANI \
   -e $OUT/.log -o $OUT/.log -hold_jid ${JOBS:-0000001} \
   -v ASM_DIR=$a,O=$OUT \
   $LAB_HOME/.job/_ani.uge-bash)
 check_submit_status "$JID" "$JOB_IDS"
 
 # Call SNPs from assembled genomes
-JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N Parsnp \
+JID=$(qsub -q all.q -q short.q -pe smp 16-128 -N Parsnp \
   -e $OUT/.log -o $OUT/.log -hold_jid ${JOBS:-0000001} \
   -v ASM_DIR=$a,O=$OUT \
   $LAB_HOME/.job/_parsnp.uge-bash)
