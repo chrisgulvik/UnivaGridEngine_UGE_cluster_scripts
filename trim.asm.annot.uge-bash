@@ -29,11 +29,8 @@ Optional:
 Output directory structure:
   annot/
       <sampleA>.gbk
-      <sampleA>.faa.diamond-trembl.pdf
       <sampleB>.gbk
-      <sampleB>.faa.diamond-trembl.pdf
       <sampleC>.gbk
-      <sampleC>.faa.diamond-trembl.pdf
   asm/
       <sampleA>/
           assembly_graph_with_scaffolds.gfa
@@ -47,28 +44,30 @@ Output directory structure:
           assembly_graph_with_scaffolds.gfa
           {params.txt,spades.log}.gz
       <sampleA>.fna
+      <sampleA>.InDels-corrected.cnt.txt
+      <sampleA>.SNPs-corrected.cnt.txt
       <sampleB>.fna
+      <sampleB>.InDels-corrected.cnt.txt
+      <sampleB>.SNPs-corrected.cnt.txt
       <sampleC>.fna
-      {skesa,unicyc}_<sampleA>.fna.gz
-      {skesa,unicyc}_<sampleB>.fna.gz
-      {skesa,unicyc}_<sampleC>.fna.gz
+      <sampleC>.InDels-corrected.cnt.txt
+      <sampleC>.SNPs-corrected.cnt.txt
   qa/
       Summary.16S.tab
       Summary.Assemblies.tab
       Summary.Illumina.CleanedReads-AlnStats.tab
       Summary.Illumina.CleanedReads-Bases.tab
       Summary.Illumina.GenomeCoverage.tab
-      Summary.Illumina.Pseudogenes.tab
   ssu/
-      <SampleA>.fa
+      16S.<SampleA>.fa
+      16S.<SampleB>.fa
+      16S.<SampleC>.fa
+      <SampleA>.16S-top-species-nr.tsv
       <SampleA>.blast.tsv.gz      
-      <SampleA>.top-species-nr.tsv
-      <SampleB>.fa
+      <SampleB>.16S-top-species-nr.tsv
       <SampleB>.blast.tsv.gz
-      <SampleB>.top-species-nr.tsv
-      <SampleC>.fa
+      <SampleC>.16S-top-species-nr.tsv
       <SampleC>.blast.tsv.gz
-      <SampleC>.top-species-nr.tsv
   trim_reads/
       <sampleA>_R1.paired.fq.gz
       <sampleA>_R2.paired.fq.gz
@@ -157,7 +156,7 @@ for (( i=0; i<${#READS[@]}; i+=2 )); do
     exit 1
   fi
   echo "  $b1"
-  JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N TrimAsmAnnot.$b1 \
+  JID=$(qsub -q all.q -q short.q -pe smp 16-128 -N TrimAsmAnnot.$b1 \
     -e $OUT/.log -o $OUT/.log \
     -v R1=$read1,R2=$read2,B=$b1,O=$OUT \
     $LAB_HOME/.job/_trim.asm.annot.uge-bash)
@@ -169,7 +168,7 @@ JOBS=$(cat "$JOB_IDS" | cut -f 3 -d ' ' | \
   sed -e 's/$/,/' | tr -d '\n' | sed -e 's/,$//')
 a=$OUT/asm
 r=$OUT/trim_reads
-JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N QA.reads.asm \
+JID=$(qsub -q all.q -q short.q -pe smp 16-128 -N QA.reads.asm \
   -e $OUT/.log -o $OUT/.log -hold_jid ${JOBS:-0000001} \
   -v ASM_DIR=$a,TRIM_DIR=$r,O=$OUT \
   $LAB_HOME/.job/_summarize.FastQ.FastA.uge-bash)
