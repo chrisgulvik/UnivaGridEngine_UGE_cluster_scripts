@@ -8,21 +8,21 @@ shopt -s nullglob
 STATS=( "$P"/AAI--*/aai.*,*.stats.tab )
 shopt -u nullglob
 
-if [ ${#STATS[@]} -lt 3 ]; then
-  echo 'ERROR: at least 3 stats files are required to summarize' >&2
+if [ ${#STATS[@]} -lt 1 ]; then
+  echo 'ERROR: at least 1 stats file is required to summarize' >&2
   exit 1
 fi
 
 # Verify each file has data
 for f in "${STATS[@]}"; do
-  lines=$(grep -o '[0-9]%' $f | wc -l)
+  lines=$(grep -o '%'$'\t''[0-9]' $f | wc -l)
   if [ $lines -ne 6 ]; then
     echo "ERROR: $f lacks data to extract" >&2
     exit 1
   fi
 done
 
-# Summarize AAI values
+# Summarize POCP values
 echo -n '' > "$P"/POCP.Summary.tab
 for f in "${STATS[@]}"; do
   PAIR=$(basename $f .stats.tab | sed 's/aai\.//1')
@@ -57,5 +57,12 @@ sed -i "1i ${A}" "$P"/POCP.Summary.tab
 
 # Cleanup empty logfiles
 find "$P"/.log -maxdepth 1 -type f -regextype posix-extended \
- -regex ".*/aai.*.(e|o|pe|po)[0-9]{7}" \
+ -regex ".*/pocp.*.(e|o|pe|po)[0-9]{7}(.[0-9]{1,99})?" \
  -size 0 -print0 2> /dev/null | xargs -0 rm --
+
+# E-mail completion status
+i=$(awk 'END{print NR}' "${P}"/POCP.Summary.tab)
+echo -e "POCP summary finished on $(date)\n${P}" | mail \
+ -s "${i} POCP samples $(basename "${P}") [HPC]" \
+ -a "${P}/POCP.Summary.tab" \
+ "${USER}@cdc.gov"
