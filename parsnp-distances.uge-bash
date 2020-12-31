@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 
-function usage() { 
+usage() {
   echo "
 Usage: ${0##*/} ParsnpDirectory [-h|--help]
 
@@ -55,8 +55,15 @@ echo -e "[PATH]            $PATH\n" >> "$LOGFILE"
 echo "[I/O]" >> "$LOGFILE"
 echo -e "Parsnp directory: $PARSNP_DIR\n" | tee -a "$LOGFILE"
 
+# Report start
+NAME="$(stat -c '%U' ${0})"
+echo -e "Parsnp-distances started on $(date) by ${USER}" | mail \
+ -s "started parsnp distances [HPC]" \
+ -a "${LOGFILE}" \
+ "${NAME:-$USER}@cdc.gov"
+
 # Submit the job
-JID=$(qsub -q short.q -pe smp 16-128 -N parsnp.dist-calc \
+JID=$(qsub -q all.q -q short.q -pe smp 16-128 -N parsnp.dist-calc \
   -o $PARSNP_DIR/.log -e $PARSNP_DIR/.log \
   -v PARSNP_DIR=$PARSNP_DIR \
   $LAB_HOME/.job/_parsnp-distances.uge-bash)
