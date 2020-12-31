@@ -75,6 +75,7 @@ echo "[I/O]" >> "$LOGFILE"
 echo "Input directory:  $IN" | tee -a "$LOGFILE"
 echo -e "Output directory: $OUT/phy\n" | tee -a "$LOGFILE"
 
+# Prevent input files with whitespace
 if [[ $(find . -maxdepth 1 -type f -regextype posix-extended \
   -regex ".*[[:space:]].*\.(gb,gbk,gbf,gbff)($|\.gz$)" \
   | wc -l) -gt 0 ]]; then
@@ -85,9 +86,14 @@ if [[ $(find . -maxdepth 1 -type f -regextype posix-extended \
    -printf '%p\t%s bytes\n' >&2
   exit 1
 fi
+
+# Gather input files
 shopt -s nullglob
 FILES=( "${IN}"/*.{gb,gbk,gbf,gbff}{'',.gz} )
 shopt -u nullglob
+echo 'Input files:' >> "$LOGFILE"
+printf '%s\n' "${FILES[@]}" >> "$LOGFILE"
+echo '' >> "$LOGFILE"
 if [[ "${#FILES[@]}" -eq 1 ]]; then
   echo 'ERROR: no GenBank files found' >&2
   exit 1
@@ -96,6 +102,14 @@ fi
 echo -e "[SAMPLES]\n$(echo ${FILES[@]} | tr ' ' '\n')\n" | \
   tee -a "$LOGFILE"
 
+# Report start
+NAME="$(stat -c '%U' ${0})"
+echo -e "Phylotrees started on $(date) by ${USER}" | mail \
+ -s "started ${#FILES[@]} samples for phylotrees [HPC]" \
+ -a "${LOGFILE}" \
+ "${NAME:-$USER}@cdc.gov"
+
+# Filter out and report unusually small input files
 GBK=()
 for file in "${FILES[@]}"; do
   if [[ $(find -L "${file}" -type f -size +350k 2>/dev/null) ]]; then
@@ -105,9 +119,8 @@ for file in "${FILES[@]}"; do
   fi
 done
 
-echo -n '' > "$JOB_IDS"
-
 # 16S rRNA encoding gene tree
+echo -n '' > "$JOB_IDS"
 JID=$(qsub -q all.q -q short.q -pe smp 1 -N phy.16S \
   -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
   -v GENE=16S,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=rrna \
