@@ -65,26 +65,28 @@ Output directory structure:
       <sampleB>.SNPs-corrected.cnt.txt
       <sampleC>.fna
       <sampleC>.InDels-corrected.cnt.txt
+      <sampleC>.SNPs-corrected.cnt.txt
   parsnp/
       parsnp.ggr
       parsnp.tree
       SNP-distance.matrix.tsv
       SNP-distance.pairs.tsv
   qa/
+      Summary.16S.tab
       Summary.Assemblies.tab
       Summary.Illumina.CleanedReads-AlnStats.tab
       Summary.Illumina.CleanedReads-Bases.tab
       Summary.Illumina.GenomeCoverage.tab
   ssu/
-      16S.<sampleA>.fa
-      16S.<sampleB>.fa
-      16S.<samplec>.fa
-      <sampleA>.16S-top-species.tsv
-      <sampleA>.blast.tsv.gz
-      <sampleB>.16S-top-species.tsv
-      <sampleB>.blast.tsv.gz
-      <sampleC>.16S-top-species.tsv
-      <sampleC>.blast.tsv.gz
+      16S.<SampleA>.fa
+      16S.<SampleB>.fa
+      16S.<SampleC>.fa
+      <SampleA>.16S-top-species-nr.tsv
+      <SampleA>.blast.tsv.gz
+      <SampleB>.16S-top-species-nr.tsv
+      <SampleB>.blast.tsv.gz
+      <SampleC>.16S-top-species-nr.tsv
+      <SampleC>.blast.tsv.gz
   trim_reads/
       <sampleA>_R1.paired.fq.gz
       <sampleA>_R2.paired.fq.gz
@@ -151,6 +153,9 @@ echo -e "Output directory: $OUT\n" | tee -a "$LOGFILE"
 shopt -s nullglob
 READS=( $IN/*.fastq.gz )
 shopt -u nullglob
+echo 'Input files:' >> "$LOGFILE"
+printf '%s\n' "${READS[@]}" >> "$LOGFILE"
+echo '' >> "$LOGFILE"
 if [[ $((${#READS[@]} % 2)) -ne 0 ]]; then
   echo "ERROR: uneven number (${#READS[@]}) of FastQ files" >&2
   exit 1
@@ -159,6 +164,13 @@ if [ ${#READS[@]} -lt 1 ]; then
   echo 'ERROR: no read sets found' >&2
   exit 1
 fi
+
+# Report start
+NAME="$(stat -c '%U' ${0})"
+echo -e "Assembly started on $(date) by ${USER}" | mail \
+ -s "started $((${#READS[@]} / 2)) samples for assembly [HPC]" \
+ -a "${LOGFILE}" \
+ "${NAME:-$USER}@cdc.gov"
 
 # Generate annotated assemblies for all input read pairs
 mkdir -p $OUT/.log
@@ -191,18 +203,15 @@ JID=$(qsub -q all.q -q short.q -pe smp 16-128 -N QA.reads.asm \
   $LAB_HOME/.job/_summarize.FastQ.FastA.uge-bash)
 check_submit_status "$JID" "$JOB_IDS"
 
-# Exit after annotating assemblies if < 3 samples
-[ ${#READS[@]} -lt 3 ] && { exit 0; }
-
 # Compute ANI values
-JID=$(qsub -q all.q -q short.q -pe smp 16-128 -N ANI \
+JID=$(qsub -q all.q -q short.q -pe smp 1 -N ANI \
   -e $OUT/.log -o $OUT/.log -hold_jid ${JOBS:-0000001} \
   -v ASM_DIR=$a,O=$OUT \
   $LAB_HOME/.job/_ani.uge-bash)
 check_submit_status "$JID" "$JOB_IDS"
 
 # Call SNPs from assembled genomes
-JID=$(qsub -q all.q -q short.q -pe smp 16-128 -N Parsnp \
+JID=$(qsub -q all.q -pe smp 16-128 -N Parsnp \
   -e $OUT/.log -o $OUT/.log -hold_jid ${JOBS:-0000001} \
   -v ASM_DIR=$a,O=$OUT \
   $LAB_HOME/.job/_parsnp.uge-bash)
