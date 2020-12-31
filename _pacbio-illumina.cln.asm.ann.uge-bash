@@ -6,14 +6,14 @@ verify_file()
   # 1=filename; 2=file description; 3=size in MB
   if [ -f  "${1}" ]; then
     if [ -s  "${1}" ]; then
-      if [[ $(find "${1}" -type f -size +"${3}"M) ]]; then
+      if [[ $(find -L "${1}" -type f -size +"${3}"M) ]]; then
         :
       else
-        echo "ERROR: ${2} file ${1} file present but < ${3} MB" >&2
+        echo "ERROR: ${2} file ${1} present but < ${3} MB" >&2
         exit 1
       fi
     else
-      echo "ERROR: ${2} file ${1} file present but empty" >&2
+      echo "ERROR: ${2} file ${1} present but empty" >&2
       exit 1
     fi
   else
@@ -284,8 +284,8 @@ if [[ -n "${R1// }" && -n "${R2// }" ]]; then
    -2 $O/.tmp/"$B"_R2.unmapped.fq $O/asm/"$B".bam
   rm -f $O/asm/"$B".{bam.bai,bam,changes}
   module unload samtools/1.8
-  if [[ ! $(find $O/.tmp/"$B"_R1.unmapped.fq -type f -size +5M) ]] || \
-   [[ ! $(find $O/.tmp/"$B"_R2.unmapped.fq -type f -size +5M) ]]; then
+  if [[ ! $(find -L $O/.tmp/"$B"_R1.unmapped.fq -type f -size +5M) ]] || \
+   [[ ! $(find -L $O/.tmp/"$B"_R2.unmapped.fq -type f -size +5M) ]]; then
     echo "INFO: unmapped Illumina reads too small for downstream analyses"
     break
   fi
