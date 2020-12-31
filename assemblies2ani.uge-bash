@@ -95,11 +95,11 @@ echo -n '' > "$JOB_IDS"
 FNA=()
 for A in "${ASM[@]}"; do
   B=$(basename ${A%\.*} | sed 's/[_-\.\(\)]//g')
-  if [[ $(find "${OUT}/annot/${B}/${B}.fna" -type f -size +2M 2>/dev/null) ]]; then
+  if [[ $(find -L "${OUT}/annot/${B}/${B}.fna" -type f -size +2M 2>/dev/null) ]]; then
     FNA+=("${OUT}/annot/${B}/${B}.fna")
-  elif [[ $(find "${OUT}/${B}/${B}.fna" -type f -size +2M 2>/dev/null) ]]; then
+  elif [[ $(find -L "${OUT}/${B}/${B}.fna" -type f -size +2M 2>/dev/null) ]]; then
     FNA+=("${OUT}/${B}/${B}.fna")
-  elif [[ $(find "${OUT}/${B}.fna" -type f -size +2M 2>/dev/null) ]]; then
+  elif [[ $(find -L "${OUT}/${B}.fna" -type f -size +2M 2>/dev/null) ]]; then
     FNA+=("${OUT}/${B}.fna")
   else
     JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N ann.$B -o $OUT/.log -e $OUT/.log <<- EOF
