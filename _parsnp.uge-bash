@@ -1,6 +1,28 @@
 #!/usr/bin/env bash
 
 
+verify_file()
+{
+  # $1=filename; $2=file description
+  # $3=size in Bytes (requires c, k, M, or G prefix)
+  if [ -f  "${1}" ]; then
+    if [ -s  "${1}" ]; then
+      if [[ $(find -L "${1}" -type f -size +"${3}") ]]; then
+        return
+      else
+        echo "ERROR: ${2} file ${1} present but < ${3}B" >&2
+        false
+      fi
+    else
+      echo "ERROR: ${2} file ${1} present but empty" >&2
+      false
+    fi
+  else
+    echo "ERROR: ${2} file ${1} absent" >&2
+    false
+  fi
+}
+
 # Help
 if [[ "$1" == "--help" || "$1" == "-h" ]]; then
   echo 'this script is not meant to be executed directly'
@@ -37,36 +59,36 @@ echo "${#ASSEMS[@]} genomes will be processed..."
 # Symlink assembly files to .tmp and discard file extensions
 mkdir -p $O/parsnp/.tmp
 for FILE in ${ASSEMS[@]}; do
-  BASE=$(basename $FILE)
-  NO_EXT="${BASE%.*}"
-  ln -sf $FILE $O/parsnp/.tmp/$NO_EXT
+  if verify_file "${FILE}" 'assembly' '1k'; then
+    BASE="$(basename "${FILE}")"
+    NO_EXT="${BASE%.*}"
+    ln -sf "${FILE}" "${O}/parsnp/.tmp/${NO_EXT}"
+  else
+    echo "INFO: ${FILE} excluded from analysis" >&2
+  fi
 done
 
-# Pick reference genome based on largest filesize
-LARGEST_SIZE=$(ls -SLr $O/parsnp/.tmp/* | tail -n 1)
-REF=$(readlink -f $LARGEST_SIZE)
+# Pick reference genome
+if [ -z $REF ]; then
+  LARGEST_SIZE=$(ls -SLr $O/parsnp/.tmp/* | tail -n 1 | xargs basename)
+  REF="${O}/parsnp/.ref/${LARGEST_SIZE}"
+  mkdir $O/parsnp/.ref
+  mv -f "${O}/parsnp/.tmp/${LARGEST_SIZE}" "${REF}"
+else
+  REF="$(readlink -f "${REF}")"
+fi
 
-# Compute distances
-module load harvest/1.1.3
-parsnp -v -x -c -o $O/parsnp -r $REF -d $O/parsnp/.tmp -p $NSLOTS
-if [ ! -f "$O/parsnp/parsnp.ggr" ] || \
-[[ ! $(find "$O/parsnp/parsnp.ggr" -type f -size +1k 2> /dev/null) ]]; then
+# Run parsnp
+module load parsnp/1.5.2 FastTree/2.1.11-SSE-OpenMP
+parsnp --use-fasttree -v -c -o "${O}/parsnp" -r "${REF}"\
+ -d "${O}/parsnp/.tmp" -p $NSLOTS
+module unload parsnp/1.5.2 FastTree/2.1.11-SSE-OpenMP
+if ! verify_file "${O}/parsnp/parsnp.ggr" 'gingr' '100k'; then
   echo """ERROR: Parsnp failed.
   Check $O/parsnp/parsnpAligner.log or $O/.log/Parsnp.e*""" >&2
+  echo -e "Parsnp failed on $(date)\n${O}/parsnp" | mail \
+   -s "Parsnp failed $(basename "${O}/parsnp") [HPC]" \
+   "${USER}@cdc.gov"
   exit 1
 fi
-rm -rf $O/parsnp/.tmp
-harvesttools -i $O/parsnp/parsnp.ggr -S $O/parsnp/SNPs.fa
-module unload harvest/1.1.3
-module load perl/5.16.1-MT
-perl $LAB_HOME/.bin/pairwiseDistances.pl -n $NSLOTS $O/parsnp/SNPs.fa |\
- sort -k3,3n > $O/parsnp/SNP-distance.pairs.tsv
-module unload perl/5.16.1-MT
-python $LAB_HOME/.bin/pairwiseTo2d.py -i $O/parsnp/SNP-distance.pairs.tsv \
- -o $O/parsnp/SNP-distance.matrix.tsv --sort
-sed -i "s/\t-/\t0/g" $O/parsnp/SNP-distance.matrix.tsv
-
-# Cleanup
-rm -f $O/parsnp/{all_mumi.ini,parsnpAligner.{ini,log}}
-rm -f $O/parsnp/{parsnp.{rec,xmfa},psnn.ini,SNPs.fa}
-rm -f $O/parsnp/*.fna.ref
+rm -rf $O/parsnp/.{ref,tmp}
