@@ -8,8 +8,8 @@ shopt -s nullglob
 STATS=( "$P"/ANI--*/ani.*,*.stats.tab )
 shopt -u nullglob
 
-if [ ${#STATS[@]} -lt 3 ]; then
-  echo 'ERROR: at least 3 stats files are required to summarize' >&2
+if [ ${#STATS[@]} -lt 1 ]; then
+  echo 'ERROR: at least 1 stats file is required to summarize' >&2
   exit 1
 fi
 
@@ -30,26 +30,33 @@ for f in "${STATS[@]}"; do
   S2=${PAIR%%,*}
 
   # bidirectional values
-  PROT=$(grep ',' $f | cut -f 2 | cut -d \/ -f 1 | awk '{print $1/2}')
+  FRAG=$(grep ',' $f | cut -f 2 | cut -d \/ -f 1 | awk '{print $1/2}')
   MEAN=$(grep ',' $f | cut -f 3 | sed 's/%//1')
   STDEV=$(grep ',' $f | cut -f 4 | sed 's/%//1')
 
   # unidirectional values
-  P1=$(grep -v -e ',' -e 'StDev' $f | sed -n 1p | cut -f 2 | cut -d \/ -f 1)
+  F1=$(grep -v -e ',' -e 'StDev' $f | sed -n 1p | cut -f 2 | cut -d \/ -f 1)
   M1=$(grep -v -e ',' -e 'StDev' $f | sed -n 1p | cut -f 3 | sed 's/%//1')
   D1=$(grep -v -e ',' -e 'StDev' $f | sed -n 1p | cut -f 4 | sed 's/%//1')
 
-  P2=$(grep -v -e ',' -e 'StDev' $f | sed -n 2p | cut -f 2 | cut -d \/ -f 1)
+  F2=$(grep -v -e ',' -e 'StDev' $f | sed -n 2p | cut -f 2 | cut -d \/ -f 1)
   M2=$(grep -v -e ',' -e 'StDev' $f | sed -n 2p | cut -f 3 | sed 's/%//1')
   D2=$(grep -v -e ',' -e 'StDev' $f | sed -n 2p | cut -f 4 | sed 's/%//1')
 
-  echo -e "$S1\t$S2\t$PROT\t$MEAN\t$STDEV\t$P1\t$M1\t$D1\t$P2\t$M2\t$D2" >> "$P"/ANI.Summary.tab
+  echo -e "$S1\t$S2\t$FRAG\t$MEAN\t$STDEV\t$F1\t$M1\t$D1\t$F2\t$M2\t$D2" >> "$P"/ANI.Summary.tab
 done
-A='Sample\tSample\tProteins_Used_for_Bidirectional_Calc[#]\tBidirectional_ANI[%]\tBidirectional_StDev[%]'
-B='\tProteins_Used_for_Unidirectional_Calc[#]\tUnidirectional_ANI[%]\tUnidirectional_StDev[%]'
+A='Sample\tSample\tFragments_Used_for_Bidirectional_Calc[#]\tBidirectional_ANI[%]\tBidirectional_StDev[%]'
+B='\tFragments_Used_for_Unidirectional_Calc[#]\tUnidirectional_ANI[%]\tUnidirectional_StDev[%]'
 sed -i "1i ${A}${B}${B}" "$P"/ANI.Summary.tab
 
 # Cleanup empty logfiles
 find "$P"/.log -maxdepth 1 -type f -regextype posix-extended \
- -regex ".*/ani.*.(e|o|pe|po)[0-9]{7}" \
+ -regex ".*/ani.*.(e|o|pe|po)[0-9]{7}(.[0-9]{1,99})?" \
  -size 0 -print0 2> /dev/null | xargs -0 rm --
+
+# E-mail completion status
+i=$(awk 'END{print NR}' "${P}"/ANI.Summary.tab)
+echo -e "ANI summary finished on $(date)\n${P}" | mail \
+ -s "${i} ANI samples $(basename "${P}") [HPC]" \
+ -a "${P}/ANI.Summary.tab" \
+ "${USER}@cdc.gov"
