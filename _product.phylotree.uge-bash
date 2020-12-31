@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+
+
+# Input requirements
+[[ -z "$GENE" ]] && { echo 'ERROR: $GENE not set' >&2; exit 1; }
+[[ -z "$PROD" ]] && { echo 'ERROR: $PROD not set' >&2; exit 1; }
+[[ -z "$LOGFILE" ]] && { echo 'ERROR: $LOGFILE not set' >&2; exit 1; }
+[[ -z "$OUT" ]] && { echo 'ERROR: $OUT not set' >&2; exit 1; }
+
+source /etc/profile.d/modules.sh
+source $HOME/.bashrc
+export PATH="$LAB_HOME/.anaconda2/bin:$PATH"
+
+# Find annotated files
+shopt -s nullglob
+GBK=( "$OUT"/*.{gb,gbf,gbk} "$OUT"/*/*.{gb,gbf,gbk} )
+shopt -u nullglob
+if [[ "${#GBK[@]}" -lt 3 ]]; then
+  echo "ERROR: at least 3 annotated files are required; found ${#GBK[@]}" >&2
+  exit 1
+else
+  echo -e "[ANNOTATED FILES] FOR $GENE\n$(echo ${GBK[@]} | \
+  tr ' ' '\n')\n" >> "$LOGFILE"
+fi
+
+# Extract $PROD from each annotation file
+source activate bpy2
+for G in "${GBK[@]}"; do
+  B=$(basename "$G" | sed -e 's/\.gbf//1' -e 's/\.gbk//1' -e 's/\.gb//1') ;
+  python "$LAB_HOME"/.bin/extract.record.from.genbank.py -i "$G" -u product \
+    -o "$OUT"/phy/"$GENE"."$B".fa -q "$PROD";
+  [ ! -f "$OUT"/phy/"$GENE"."$B".fa ] && continue ;
+  awk -v awk_var="$B" '/^>/{print ">" awk_var; next} {print}' \
+    "$OUT"/phy/"$GENE"."$B".fa > "$OUT"/phy/"$GENE"."$B".fa-renamed ;
+  rm "$OUT"/phy/"$GENE"."$B".fa ;
+  mv "$OUT"/phy/"$GENE"."$B".fa-renamed "$OUT"/phy/"$GENE"."$B".fa ;
+done
+source deactivate
+
+# Calculate pairwise similarities
+shopt -s nullglob
+FA=( "$OUT"/phy/"$GENE".*.fa )
+shopt -u nullglob
+if [[ "${#FA[@]}" -lt 3 ]]; then
+  echo "ERROR: at least 3 $GENE sequences are required; found ${#FA[@]}" >&2
+  exit 1
+fi
+module load ncbi-blast+/2.6.0
+python "$LAB_HOME"/.bin/calc.pairwise.similarities.py -e fa -p "$GENE". \
+  -i "$OUT"/phy --aligner blastn -o "$OUT"/phy/"$GENE".PairSim.tsv
+module unload ncbi-blast+/2.6.0
+perl "$LAB_HOME"/.bin/pairwiseTo2d.pl < "$OUT"/phy/"$GENE".PairSim.tsv >\
+  "$OUT"/phy/"$GENE".Pairwise_Similarities.tab
+rm "$OUT"/phy/"$GENE".PairSim.tsv
+
+# Merge and align extracted sequences
+cat "$OUT"/phy/"$GENE".*.fa > "$OUT"/phy/"$GENE".merged.fasta
+rm "$OUT"/phy/"$GENE".*.fa
+module load muscle/3.8.425
+muscle -in "$OUT"/phy/"$GENE".merged.fasta -out "$OUT"/phy/"$GENE".fas.aln \
+  -maxiters 50 -maxhours 2 -quiet
+module unload muscle/3.8.425
+rm "$OUT"/phy/"$GENE".merged.fasta
+
+# Build NJ tree
+source activate Rphylo
+echo "
+library('ape')
+infile = '$OUT/phy/$GENE.fas.aln'
+num.boots = 1000
+f <- function(x) {nj(dist.dna(x, model='JC69', variance=FALSE, gamma=FALSE, p=TRUE))}
+seqs.aln <- read.dna(infile, format='fasta')
+NJ.tree <- f(seqs.aln)
+NJ.boots <- boot.phylo(NJ.tree, seqs.aln, f, B=num.boots, trees=FALSE, quiet=TRUE)
+NJ.tree$node.label <- round(NJ.boots/num.boots*100, 1)
+write.tree(NJ.tree, file='$OUT/phy/$GENE.NJ.tre', append=FALSE, digits=20)
+" | R --slave --vanilla
+source deactivate
+module load figtree/1.4.3
+figtree -graphic PDF "$OUT"/phy/"$GENE".NJ.tre "$OUT"/phy/"$GENE".NJ.pdf > /dev/null
+module unload figtree/1.4.3
