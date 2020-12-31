@@ -1,6 +1,28 @@
 #!/usr/bin/env bash
 
 
+verify_file()
+{
+  # $1=filename; $2=file description
+  # $3=size in Bytes (requires c, k, M, or G prefix)
+  if [ -f  "${1}" ]; then
+    if [ -s  "${1}" ]; then
+      if [[ $(find -L "${1}" -type f -size +"${3}") ]]; then
+        return
+      else
+        echo "ERROR: ${2} file ${1} present but < ${3}B" >&2
+        false
+      fi
+    else
+      echo "ERROR: ${2} file ${1} present but empty" >&2
+      false
+    fi
+  else
+    echo "ERROR: ${2} file ${1} absent" >&2
+    false
+  fi
+}
+
 # Help
 if [[ "$1" == "--help" || "$1" == "-h" ]]; then
   echo 'this script is not meant to be executed directly'
@@ -19,20 +41,40 @@ if [[ -z "$PARSNP_DIR" ]]; then
   exit 1
 fi
 GGR="$PARSNP_DIR"/parsnp.ggr
+! verify_file "${GGR}" 'gingr' '100k' && { exit 1; }
+if verify_file "${PARSNP_DIR}/SNP-distances.matrix.tsv" 'SNP matrix' '20c' \
+2> /dev/null; then
+  echo -n 'INFO: found precomputed SNP distances matrix file'
+  echo " ${PARSNP_DIR}/SNP-distances.matrix.tsv"
+  echo ' Will not overwrite these files skipping re-calculations'
+  exit 0
+fi
 
 # Compute distances
 module load harvest/1.1.3
 harvesttools -i "$GGR" -S "$PARSNP_DIR"/SNPs.fa
 module unload harvest/1.1.3
+sed -i 's/\.ref//1' "$PARSNP_DIR"/SNPs.fa
+! verify_file "$PARSNP_DIR"/SNPs.fa 'SNP' '10c' && { exit 1; }
 module load perl/5.16.1-MT
 perl $LAB_HOME/.bin/pairwiseDistances.pl -n $NSLOTS "$PARSNP_DIR"/SNPs.fa |\
  sort -k3,3n > "$PARSNP_DIR"/SNP-distances.pairs.tsv
 module unload perl/5.16.1-MT
+! verify_file "$PARSNP_DIR"/SNP-distances.pairs.tsv 'SNP distances' '20c' && { exit 1; }
 python $LAB_HOME/.bin/pairwiseTo2d.py -i "$PARSNP_DIR"/SNP-distances.pairs.tsv \
  -o "$PARSNP_DIR"/SNP-distances.matrix.tsv --sort
+! verify_file "$PARSNP_DIR"/SNP-distances.matrix.tsv 'SNP matrix' '20c' && { exit 1; }
 sed -i "s/\t-/\t0/g" "$PARSNP_DIR"/SNP-distances.matrix.tsv
 
 # Cleanup
-rm -f "$PARSNP_DIR"/{all_mumi.ini,parsnpAligner.ini,parsnp.rec,psnn.ini}
-rm -f "$PARSNP_DIR"/*.fna.ref
+rm -f "$PARSNP_DIR"/{all_mumi.ini,parsnpAligner.ini,parsnp.{rec,xmfa},psnn.ini}
+rm -f "$PARSNP_DIR"/*.ref
+rm -rf "$PARSNP_DIR"/tmp
 pigz -9f "$PARSNP_DIR"/{SNPs.fa,parsnpAligner.log}
+
+# E-mail completion status
+i=$(zgrep -c '>' "${PARSNP_DIR}"/SNPs.fa.gz)
+echo -e "Parsnp distances finished on $(date)\n${PARSNP_DIR}" | mail \
+ -s "${i} sample Parsnp distances $(basename "${PARSNP_DIR}") [HPC]" \
+ -a "${PARSNP_DIR}/SNP-distance.matrix.tsv" \
+ "${USER}@cdc.gov"
