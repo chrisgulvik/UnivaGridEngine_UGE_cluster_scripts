@@ -7,19 +7,19 @@ verify_file()
   # $3=size in Bytes (requires c, k, M, or G prefix)
   if [ -f  "${1}" ]; then
     if [ -s  "${1}" ]; then
-      if [[ $(find "${1}" -type f -size +"${3}") ]]; then
-        :
+      if [[ $(find -L "${1}" -type f -size +"${3}") ]]; then
+        return
       else
-        echo "ERROR: ${2} file ${1} file present but < ${3}B" >&2
-        exit 1
+        echo "ERROR: ${2} file ${1} present but < ${3}B" >&2
+        false
       fi
     else
-      echo "ERROR: ${2} file ${1} file present but empty" >&2
-      exit 1
+      echo "ERROR: ${2} file ${1} present but empty" >&2
+      false
     fi
   else
     echo "ERROR: ${2} file ${1} absent" >&2
-    exit 1
+    false
   fi
 }
 
@@ -79,7 +79,7 @@ RAMSIZE_PER_THREAD=$(get_MB_free_memory_per_thread "$NSLOTS")
 echo "INFO: ${RAMSIZE_TOT}GB total and ${RAMSIZE_PER_THREAD}MB per thread" >&2
 
 # Annotate cleaned and corrected assembly
-if [[ $(find $O/annot/$B/$B.faa -type f -size +100k 2> /dev/null) ]]; then
+if verify_file "${O}/annot/${B}/${B}.faa" 'proteome file' '100k'; then
   echo "INFO: found annotation file for $B; skipping prokka" >&2
 else
   module load perl/5.16.1-MT prokka/1.13.3
