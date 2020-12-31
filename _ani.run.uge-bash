@@ -1,29 +1,52 @@
 #!/usr/bin/env bash
 
 
+verify_file()
+{
+  # $1=filename; $2=file description
+  # $3=size in Bytes (requires c, k, M, or G prefix)
+  if [ -f  "${1}" ]; then
+    if [ -s  "${1}" ]; then
+      if [[ $(find -L "${1}" -type f -size +"${3}") ]]; then
+        return
+      else
+        echo "ERROR: ${2} file ${1} present but < ${3}B" >&2
+        false
+      fi
+    else
+      echo "ERROR: ${2} file ${1} present but empty" >&2
+      false
+    fi
+  else
+    echo "ERROR: ${2} file ${1} absent" >&2
+    false
+  fi
+}
+
 # Input requirements
+if [[ "${SGE_TASK_ID}" -ge 0 ]] \
+&& verify_file "${FOFN}" 'file of filenames' '1c'; then
+  line=$(sed -n "${SGE_TASK_ID}"p "${FOFN}")
+  S1=$(echo "${line}" | cut -f 1)
+  S2=$(echo "${line}" | cut -f 2)
+fi
 [[ -z "$S1" ]] && { echo 'ERROR: $S1 not set' >&2; exit 1; }
 [[ -z "$S2" ]] && { echo 'ERROR: $S2 not set' >&2; exit 1; }
 [[ -z "$O" ]] && { echo 'ERROR: $O not set' >&2; exit 1; }
 
 # Verify input files exist and not empty
 for f in $S1 $S2; do
-  if [ ! -e "$f" ]; then
-    echo "ERROR: $f nonexistent" >&2
-    exit 1
-  fi
-  if [ ! -s "$f" ]; then
-    echo "ERROR: $f empty" >&2
-    exit 1
-  fi
+  ! verify_file "${f}" 'input sequence file' '1k' && { exit 1; }
 done
 
 # When sample (base)name variable not given, grab from filename
 if [[ -z "${B1}" ]]; then
-  B1=$(basename ${S1%.gz} | sed 's/\.[^.]*$//1' | sed 's/_genomic//1')
+  B1=$(basename ${S1%.gz} | sed 's/\.[^.]*$//1' |\
+   sed 's/_genomic//1')
 fi
 if [[ -z "${B2}" ]]; then
-  B2=$(basename ${S2%.gz} | sed 's/\.[^.]*$//1' | sed 's/_genomic//1')
+  B2=$(basename ${S2%.gz} | sed 's/\.[^.]*$//1' |\
+   sed 's/_genomic//1')
 fi
 
 # Skip comparison if precomputed value exists
@@ -45,8 +68,7 @@ source /etc/profile.d/modules.sh
 module load ncbi-blast+/2.6.0
 source $HOME/.bashrc
 export PATH="$LAB_HOME/.anaconda2/bin:$PATH"
-sleep 0.5
 source activate bpy2
 command -v blastn > /dev/null 2>&1 || { echo 'ERROR: blastn not found' >&2; exit 1; }
 ANIb+.py -1 $S1 -2 $S2 --name1 $B1 --name2 $B2 -c $NSLOTS \
- -o "$O/ANI--$B1,$B2" $XOPTS
+ -o "$O/ANI--$B1,$B2"
