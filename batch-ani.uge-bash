@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 
-function usage() { 
+usage() {
   echo "
 Usage: ${0##*/} InputDirectory [OutputDirectory] [-h|--help]
 
@@ -9,9 +9,9 @@ Required:
   <InputDirectory>   All FastA and GenBank formatted files ending in:
                        {fa,fas,fsa,fna,fasta} and {gb,gbk,gbf,gbff}
                        with optional .gz compression will be analyzed.
-                     Commas are forbidden in filenames.
+                     Whitespace is forbidden in filenames.
 
-                     Only files that exceed 1 MB in size within <InDir>
+                     Only files that exceed 45 kB in size within <InDir>
                      will be used for ANI comparisons.
 
 Optional:
@@ -24,6 +24,16 @@ Optional:
 
   "
   }
+
+check_submit_status()
+{
+  # 1=job ID number; 2=job IDs logfile
+  if [[ $1 != *submitted* ]]; then
+    echo 'ERROR: improper job submission' >&2
+    exit 1
+  fi
+  echo "$1" >> "$2"
+}
 
 # Requirements
 command -v qsub >/dev/null 2>&1 || { echo 'ERROR: qsub not found' >&2; exit 1; }
@@ -50,6 +60,22 @@ fi
 LOG_BASE=$(basename $0 .uge-bash)
 LOGFILE="$OUT"/.log/"$LOG_BASE".log.txt
 JOB_IDS="$OUT"/.log/"$LOG_BASE".job_ids.txt
+TMP_DIR=$(mktemp --tmpdir=/dev/shm \
+ --directory "${USER}".XXXXXX)
+if [ $? -ne 0 ]; then
+  echo 'ERROR: failed to make /dev/shm temporary ramdisk dir' >&2
+  echo 'INFO: using /tmp HDD space for temporary space' >&2
+  TMP_DIR=$(mktemp --tmpdir=/tmp \
+   --directory "${USER}".XXXXXX)
+  echo "INFO: using $TMP_DIR temporary HDD dir" >&2
+else
+  echo "INFO: using $TMP_DIR temporary ramdisk dir" >&2
+fi
+trap '{ rm -rf "$TMP_DIR"; exit; }' EXIT INT QUIT TERM
+if [ ! -d "$TMP_DIR" ]; then
+  echo "ERROR: absent $TMP_DIR directory" >&2
+  exit 1
+fi
 
 # Log system and user info for debugging
 echo "[START]           $(date)" > "$LOGFILE"
@@ -64,6 +90,7 @@ echo "[I/O]" >> "$LOGFILE"
 echo "Input directory:  $IN" | tee -a "$LOGFILE"
 echo -e "Output directory: $OUT\n" | tee -a "$LOGFILE"
 
+# Prevent input files with whitespace
 if [[ $(find . -maxdepth 1 -type f -regextype posix-extended \
   -regex ".*[[:space:]].*\.(fa|fas|fsa|fna|fasta|gb,gbk,gbf,gbff)($|\.gz$)" \
   | wc -l) -gt 0 ]]; then
@@ -74,64 +101,104 @@ if [[ $(find . -maxdepth 1 -type f -regextype posix-extended \
    -printf '%p\t%s bytes\n' >&2
   exit 1
 fi
+
+# Gather input files
 shopt -s nullglob
 ASM=( "${IN}"/*.{fa,fas,fsa,fna,fasta,gb,gbk,gbf,gbff}{'',.gz} )
 shopt -u nullglob
+echo 'Input files:' >> "$LOGFILE"
+printf '%s\n' "${ASM[@]}" >> "$LOGFILE"
+echo '' >> "$LOGFILE"
 [[ "${ASM[@]}" =~ "," ]] && { usage; exit 1; }
-echo -e "[ASSEMBLIES]\n$(echo ${ASM[@]} | tr ' ' '\n')\n" | \
+echo -e "[GENOMES]\n$(echo ${ASM[@]} | tr ' ' '\n')\n" | \
   tee -a "$LOGFILE"
-
-if [ ${#ASM[@]} -lt 3 ]; then
-  echo 'ERROR: at least 3 genomes are required for batch analysis' >&2
+if [ ${#ASM[@]} -lt 2 ]; then
+  echo 'ERROR: at least 2 genomes are required for batch analysis' >&2
   exit 1
 fi
 
+# Report start
+NAME="$(stat -c '%U' ${0})"
+echo -e "ANI started on $(date) by ${USER}" | mail \
+ -s "started ${#ASM[@]} samples for ANI [HPC]" \
+ -a "${LOGFILE}" \
+ "${NAME:-$USER}@cdc.gov"
+
+# Filter out and report unusually small genomes
 FNA=()
 for A in "${ASM[@]}"; do
-  if [[ $(find -L "$A" -type f -size +1M 2>/dev/null) ]]; then
+  # TO-DO: file content corruption and format validation tests
+  if [[ $(find -L "$A" -type f -size +45k 2>/dev/null) ]]; then
     FNA+=("$A")
   else
-    echo "INFO: $A not >1 MB so it was not included in the analysis" >&2
+    echo "INFO: $A not >45 kB so it was not included in the analysis" >&2
   fi
 done
+if [ ${#FNA[@]} -lt 2 ]; then
+  echo 'ERROR: found <2 genome files >45 kB' >&2
+  exit 1
+fi
 
-FNA_str=$(printf ",%s" "${FNA[@]}" | sed 's/^,//1')
-export FNA_str
-readarray -t COMBO < <(python - <<-EOF
+
+# Generate list of pairwise comparisons
+genomes="${TMP_DIR}/genomes.fofn"
+printf "%s\n" "${FNA[@]}" > "${genomes}"
+tasks_per_job=15
+export OUT genomes tasks_per_job
+readarray -t COMBO_FILES < <(python3 - <<-EOF
 	import itertools, os
-	a = os.getenv('FNA_str').split(',')
-	l = list(itertools.combinations(a, 2))
-	print('\n'.join('{},{}'.format(j, k) for j, k in l))
+	with open(os.getenv('genomes'), 'r') as ifh:
+	    genome_filenames = [ln.rstrip('\n') for ln in ifh]
+	def iter_chunks(iterable, items_per_chunk=int(os.getenv('tasks_per_job'))):
+	    while True:
+	        iter_chunk = itertools.islice(iterable, items_per_chunk)
+	        peek = next(iter_chunk)
+	        yield itertools.chain([peek], iter_chunk)
+
+	combos = itertools.combinations(genome_filenames, 2)
+	for idx, chunk in enumerate(iter_chunks(combos), start=1):
+	    outfile = os.path.join(os.getenv('OUT'), 'pairs.' + str(idx) + '.fofn')
+	    with open(outfile, 'w') as ofh:
+	        ofh.write('\n'.join('{}\t{}'.format(j, k) for j, k in chunk))
+	    print(outfile)
 EOF
 )
+if [ ${#COMBO_FILES[@]} -eq 0 ]; then
+  echo 'ERROR: no file pairs to submit for analysis' >&2
+  exit 1
+fi
 
+# Submit task array jobs
 echo -n '' > "$JOB_IDS"
-echo "Submitting ${#COMBO[@]} bidirectional ANI query jobs..."
-for C in "${COMBO[@]}"; do
-  C1=${C%%,*}
-  C2=${C##*,}
-  D1=$(basename ${C1%.gz} | sed 's/\.[^.]*$//1' | sed 's/[^[:alpha:]]//g')
-  D2=$(basename ${C2%.gz} | sed 's/\.[^.]*$//1' | sed 's/[^[:alpha:]]//g')
-  JID=$(qsub -q all.q -q short.q -pe smp 1-128 -N ani.$D1$D2 \
+pairs=0
+for i in "${!COMBO_FILES[@]}"; do
+  tasks=$(awk 'END{print NR}' "${COMBO_FILES[i]}")
+  [ $tasks -eq 0 ] && { echo "ERROR: empty ${COMBO_FILES[i]}" >&2; exit 1; }
+  (( pairs += "${tasks}" ))
+  JID=$(qsub -t 1-"${tasks}":1 -pe smp 1-128 \
+    -q all.q -q short.q -N ani.$((i + 1)) \
     -o $OUT/.log -e $OUT/.log \
-    -v S1=$C1,S2=$C2,O=$OUT \
+    -v FOFN="${COMBO_FILES[i]}",O="${OUT}" \
     $LAB_HOME/.job/_ani.run.uge-bash)
-  [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
+  check_submit_status "$JID" "$JOB_IDS"
   echo "$JID" >> "$JOB_IDS"
 done
-sleep 0.5
+echo "Submitted ${pairs} bidirectional ANI tasks as ${#COMBO_FILES[@]} jobs..."
+sleep 0.1
 
-JOBS=$(cat "$JOB_IDS" | cut -f 3 -d ' ' | sed -e 's/$/,/' | \
-  tr -d '\n' | sed -e 's/,$//')
+# Summarize all pairwise alignments
+JOBS=$(cat "$JOB_IDS" | cut -f 3 -d ' ' | sed 's/\..*$/,/' | \
+  tr -d '\n' | sed 's/,$//')
 if [ ${#JOBS} -lt $((`getconf ARG_MAX`-300)) ]; then
   echo "Submitting ANI summary job..."
   JID=$(qsub -q all.q -q short.q -N ani.sum \
     -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
     -v P=$OUT \
     $LAB_HOME/.job/_ani.summarize.uge-bash)
-  [[ $JID != *submitted* ]] && { echo 'ERROR: improper job submission' >&2; exit 1; }
+  check_submit_status "$JID" "$JOB_IDS"
   echo 'All jobs submitted, so you can logout and check back later!'
 else
   echo "ANI summary job skipped due to high sample number"
   echo "\$JOBS is ${#JOBS} char long which exceeds ARG_MAX"
+  echo "You will need to summarize the results manually"
 fi
