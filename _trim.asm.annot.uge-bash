@@ -13,14 +13,14 @@ verify_file()
   # $3=size in Bytes (requires c, k, M, or G prefix)
   if [ -f  "${1}" ]; then
     if [ -s  "${1}" ]; then
-      if [[ $(find "${1}" -type f -size +"${3}") ]]; then
+      if [[ $(find -L "${1}" -type f -size +"${3}") ]]; then
         :
       else
-        echo "ERROR: ${2} file ${1} file present but < ${3}B" >&2
+        echo "ERROR: ${2} file ${1} present but < ${3}B" >&2
         exit 1
       fi
     else
-      echo "ERROR: ${2} file ${1} file present but empty" >&2
+      echo "ERROR: ${2} file ${1} present but empty" >&2
       exit 1
     fi
   else
@@ -91,9 +91,9 @@ RAMSIZE_PER_THREAD=$(get_MB_free_memory_per_thread "$NSLOTS")
 echo "INFO: ${RAMSIZE_TOT}GB total and ${RAMSIZE_PER_THREAD}MB per thread" >&2
 
 # Clean reads
-if [[ $(find $O/trim_reads/"$B"_R1.paired.fq.gz -type f -size +10M 2> /dev/null) ]] && \
- [[ $(find $O/trim_reads/"$B"_R2.paired.fq.gz -type f -size +10M 2> /dev/null) ]] && \
- [[ $(find $O/trim_reads/"$B".single.fq.gz -type f -size +5k 2> /dev/null) ]]; then
+if [[ $(find -L $O/trim_reads/"$B"_R1.paired.fq.gz -type f -size +10M 2> /dev/null) ]] && \
+ [[ $(find -L $O/trim_reads/"$B"_R2.paired.fq.gz -type f -size +10M 2> /dev/null) ]] && \
+ [[ $(find -L $O/trim_reads/"$B".single.fq.gz -type f -size +5k 2> /dev/null) ]]; then
   echo "INFO: found cleaned reads for $B" >&2
 else
   # Determine read length based on the first 100 reads
@@ -260,12 +260,12 @@ if grep -E -q 'N{60}' "${O}/asm/${B}/contigs.fasta"; then
   echo "ERROR: $O/asm/$B/contigs.fasta contains 60+ Ns" >&2
   exit 1
 fi
-if [[ $(find $O/asm/"$B".fna -type f -size +2M 2> /dev/null) ]] && \
+if [[ $(find -L $O/asm/"$B".fna -type f -size +2M 2> /dev/null) ]] && \
  [ -s $O/asm/"$B".InDels-corrected.cnt.txt ] && \
  [ -s $O/asm/"$B".SNPs-corrected.cnt.txt ] && \
  $(grep -P -q "^${B}\t" $O/qa/Summary.Illumina.CleanedReads-AlnStats.tab) && \
  $(grep -P -q "/asm/${B}.fna\t" $O/qa/Summary.MLST.tab) && \
- [[ $(find $O/annot/"$B".gbk -type f -size +3M 2> /dev/null) ]]; then
+ [[ $(find -L $O/annot/"$B".gbk -type f -size +3M 2> /dev/null) ]]; then
   echo "INFO: found polished assembly for $B" >&2
   exit 0
 fi
@@ -307,7 +307,7 @@ mv -f $O/asm/"$B".uncorrected.fna $O/asm/"$B".fna
 verify_file "$O/asm/$B.fna" 'corrected SPAdes assembly' '1M'
 
 # Single read mapping if available
-if [[ $(find $O/trim_reads/"$B".single.fq.gz -type f -size +5k 2> /dev/null) ]]; then
+if [[ $(find -L $O/trim_reads/"$B".single.fq.gz -type f -size +5k 2> /dev/null) ]]; then
   module load bwa/0.7.17 samtools/1.9
   bwa index $O/asm/"$B".fna
   bwa mem -t $NSLOTS -x intractg -v 2 $O/asm/"$B".fna\
