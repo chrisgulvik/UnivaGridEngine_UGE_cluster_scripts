@@ -143,7 +143,7 @@ fi
 # Generate list of pairwise comparisons
 genomes="${TMP_DIR}/genomes.fofn"
 printf "%s\n" "${FNA[@]}" > "${genomes}"
-tasks_per_job=15
+tasks_per_job=20000
 export OUT genomes tasks_per_job
 readarray -t COMBO_FILES < <(python3 - <<-EOF
 	import itertools, os
