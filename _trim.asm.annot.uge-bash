@@ -346,11 +346,11 @@ done
 module unload mlst/2.16
 
 # Annotate cleaned and corrected assembly
-module load perl/5.16.1-MT prokka/1.14.3
+module load barrnap/0.8 perl/5.16.1-MT prokka/1.14.3
 prokka --outdir $O/annot/"$B" --prefix "$B"\
  --force --addgenes --locustag "$B" --mincontiglen 1\
  --evalue 1e-08 --cpus $NSLOTS $O/asm/"$B".fna
-module unload perl/5.16.1-MT prokka/1.14.3
+module unload barrnap/0.8 perl/5.16.1-MT prokka/1.14.3
 for ext in gb gbf gbff gbk ; do
   if [ -s "$O/annot/$B/$B.${ext}" ]; then
     verify_file "$O/annot/$B/$B.${ext}" 'annotated assembly' '3M'
@@ -363,9 +363,11 @@ done
 # 16S extraction
 ssu_file="${O}/ssu/16S.${B}.fa"
 if [[ -s "${O}/annot/${B}.gbk" ]]; then
+  source activate bpy2
   python "${LAB_HOME}"/.bin/extract.record.from.genbank.py -i "${O}/annot/${B}.gbk" \
    -u product -o "${ssu_file}" -q '16S ribosomal RNA' \
    --search-type any_q_is_rec -f rRNA
+  source deactivate
 fi
 if [[ ! -f "${ssu_file}" ]] || [[ ! -s "${ssu_file}" ]]; then
   echo -n "INFO: absent 16S rRNA gene annotation in ${O}/annot/${B}.gbk;" >&2
@@ -404,4 +406,3 @@ rm "${O}/ssu/${B}.blast.tab"
 cat "${O}/ssu/${B}.16S-top-species.tsv" >> "${O}"/qa/Summary.16S.tab
 pigz -9f "${O}/ssu/${B}.blast.tsv"
 module unload ncbi-blast+/2.9.0
-
