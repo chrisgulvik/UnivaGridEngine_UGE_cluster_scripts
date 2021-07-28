@@ -117,6 +117,7 @@ done < <(grep -v 'Total length' $O/qa/Summary.Assemblies.tab)
 # E-mail completion status
 echo -e "Assembly and QA finished on $(date)\n${O}" | mail \
  -s "${i} assembled $(basename "${O}") [HPC]" \
+ -S smtp="smtpgw.cdc.gov" \
  -a "${O}/qa/Summary.Illumina.GenomeCoverage.tab" \
  "${USER}@cdc.gov"
 
