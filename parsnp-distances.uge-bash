@@ -59,6 +59,7 @@ echo -e "Parsnp directory: $PARSNP_DIR\n" | tee -a "$LOGFILE"
 NAME="$(stat -c '%U' ${0})"
 echo -e "Parsnp-distances started on $(date) by ${USER}" | mail \
  -s "started parsnp distances [HPC]" \
+ -S smtp="smtpgw.cdc.gov" \
  -a "${LOGFILE}" \
  "${NAME:-$USER}@cdc.gov"
 

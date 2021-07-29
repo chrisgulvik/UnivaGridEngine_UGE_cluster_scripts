@@ -70,5 +70,6 @@ find "$P"/.log -maxdepth 1 -type f -regextype posix-extended \
 i=$(awk 'END{print NR}' "${P}"/AAI.Summary.tab)
 echo -e "AAI summary finished on $(date)\n${P}" | mail \
  -s "${i} AAI samples $(basename "${P}") [HPC]" \
+ -S smtp="smtpgw.cdc.gov" \
  -a "${P}/AAI.Summary.tab" \
  "${USER}@cdc.gov"

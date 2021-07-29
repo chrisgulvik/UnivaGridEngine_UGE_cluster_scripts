@@ -106,6 +106,7 @@ echo -e "[SAMPLES]\n$(echo ${FILES[@]} | tr ' ' '\n')\n" | \
 NAME="$(stat -c '%U' ${0})"
 echo -e "Phylotrees started on $(date) by ${USER}" | mail \
  -s "started ${#FILES[@]} samples for phylotrees [HPC]" \
+ -S smtp="smtpgw.cdc.gov" \
  -a "${LOGFILE}" \
  "${NAME:-$USER}@cdc.gov"
 

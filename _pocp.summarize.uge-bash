@@ -64,5 +64,6 @@ find "$P"/.log -maxdepth 1 -type f -regextype posix-extended \
 i=$(awk 'END{print NR}' "${P}"/POCP.Summary.tab)
 echo -e "POCP summary finished on $(date)\n${P}" | mail \
  -s "${i} POCP samples $(basename "${P}") [HPC]" \
+ -S smtp="smtpgw.cdc.gov" \
  -a "${P}/POCP.Summary.tab" \
  "${USER}@cdc.gov"

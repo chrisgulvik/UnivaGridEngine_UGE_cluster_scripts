@@ -76,5 +76,6 @@ pigz -9f "$PARSNP_DIR"/{SNPs.fa,parsnpAligner.log}
 i=$(zgrep -c '>' "${PARSNP_DIR}"/SNPs.fa.gz)
 echo -e "Parsnp distances finished on $(date)\n${PARSNP_DIR}" | mail \
  -s "${i} sample Parsnp distances $(basename "${PARSNP_DIR}") [HPC]" \
+ -S smtp="smtpgw.cdc.gov" \
  -a "${PARSNP_DIR}/SNP-distance.matrix.tsv" \
  "${USER}@cdc.gov"

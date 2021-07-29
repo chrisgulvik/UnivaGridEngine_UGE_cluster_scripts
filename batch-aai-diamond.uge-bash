@@ -121,6 +121,7 @@ fi
 NAME="$(stat -c '%U' ${0})"
 echo -e "AAI started on $(date) by ${USER}" | mail \
  -s "started ${#PROT[@]} samples for AAI [HPC]" \
+ -S smtp="smtpgw.cdc.gov" \
  -a "${LOGFILE}" \
  "${NAME:-$USER}@cdc.gov"
 

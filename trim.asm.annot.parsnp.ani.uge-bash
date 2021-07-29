@@ -169,6 +169,7 @@ fi
 NAME="$(stat -c '%U' ${0})"
 echo -e "Assembly started on $(date) by ${USER}" | mail \
  -s "started $((${#READS[@]} / 2)) samples for assembly [HPC]" \
+ -S smtp="smtpgw.cdc.gov" \
  -a "${LOGFILE}" \
  "${NAME:-$USER}@cdc.gov"
 

@@ -121,6 +121,7 @@ fi
 NAME="$(stat -c '%U' ${0})"
 echo -e "ANI started on $(date) by ${USER}" | mail \
  -s "started ${#ASM[@]} samples for ANI [HPC]" \
+ -S smtp="smtpgw.cdc.gov" \
  -a "${LOGFILE}" \
  "${NAME:-$USER}@cdc.gov"
 

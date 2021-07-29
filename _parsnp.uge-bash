@@ -88,6 +88,7 @@ if ! verify_file "${O}/parsnp/parsnp.ggr" 'gingr' '100k'; then
   Check $O/parsnp/parsnpAligner.log or $O/.log/Parsnp.e*""" >&2
   echo -e "Parsnp failed on $(date)\n${O}/parsnp" | mail \
    -s "Parsnp failed $(basename "${O}/parsnp") [HPC]" \
+   -S smtp="smtpgw.cdc.gov" \
    "${USER}@cdc.gov"
   exit 1
 fi
