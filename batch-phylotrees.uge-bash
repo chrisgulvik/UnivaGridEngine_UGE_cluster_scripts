@@ -124,7 +124,7 @@ done
 echo -n '' > "$JOB_IDS"
 JID=$(qsub -q all.q -q short.q -pe smp 1 -N phy.16S \
   -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
-  -v GENE=16S,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=rrna \
+  -v IN=$IN,GENE=16S,OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=rrna \
   $LAB_HOME/.job/_gene.phylotree.uge-bash)
 check_submit_status "$JID" "$JOB_IDS"
 
@@ -149,7 +149,7 @@ for key in "${!GENE_PROD[@]}"; do
   val="'${GENE_PROD[$key]}'"
   JID=$(qsub -q all.q -q short.q -pe smp 1 -N phy."$key" \
     -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
-    -v PROD="$val",GENE="$key",OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=gene_or_exactproduct \
+    -v IN=$IN,PROD="$val",GENE="$key",OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=gene_or_exactproduct \
     $LAB_HOME/.job/_gene.phylotree.uge-bash)
   check_submit_status "$JID" "$JOB_IDS"
 done
@@ -164,7 +164,7 @@ for key in "${!GENE_PROD[@]}"; do
   val="'${GENE_PROD[$key]}'"
   JID=$(qsub -q all.q -q short.q -pe smp 1 -N phy."$key" \
     -o $OUT/.log -e $OUT/.log -hold_jid ${JOBS:-0000001} \
-    -v PROD="$val",GENE="$key",OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=gene_or_withinproduct \
+    -v IN=$IN,PROD="$val",GENE="$key",OUT=$OUT,LOGFILE=$LOGFILE,EXTRN=gene_or_withinproduct \
     $LAB_HOME/.job/_gene.phylotree.uge-bash)
   check_submit_status "$JID" "$JOB_IDS"
 done
